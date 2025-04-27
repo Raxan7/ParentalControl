@@ -1,13 +1,17 @@
 // ScreenTimeManager.java
 package com.example.parentalcontrol;
 
+import static android.content.Context.MODE_PRIVATE;
+
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.provider.Settings;
+import android.util.Log;
 
 import org.json.JSONObject;
 
@@ -20,10 +24,33 @@ import okhttp3.RequestBody;
 public class ScreenTimeManager {
     private final Context context;
     private final AlarmManager alarmManager;
+    private final ScreenTimeRepository screenTimeRepo;
+    private final ScreenTimeSync screenTimeSync;
 
     public ScreenTimeManager(Context context) {
         this.context = context;
         this.alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        this.screenTimeRepo = new ScreenTimeRepository(context);
+        this.screenTimeSync = new ScreenTimeSync(context);
+    }
+
+    public void checkAndSyncScreenTime() {
+        // Calculate current day's screen time
+        screenTimeRepo.calculateAndSaveDailyScreenTime();
+
+        // Sync with backend
+        screenTimeSync.syncScreenTime(new ScreenTimeSync.SyncCallback() {
+            @Override
+            public void onSuccess() {
+                Log.d("ScreenTimeManager", "Screen time synced successfully");
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                Log.e("ScreenTimeManager", "Screen time sync failed", e);
+                ErrorHandler.handleApiError(context, e, "screen_time_sync");
+            }
+        });
     }
 
     /**
@@ -31,6 +58,12 @@ public class ScreenTimeManager {
      * @param maxMinutes Maximum allowed screen time in minutes
      */
     public void setDailyLimit(long maxMinutes) {
+        SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
+        prefs.edit().putLong("daily_limit_minutes", maxMinutes).apply();
+
+        // Save to local database
+        screenTimeRepo.saveScreenTimeRules(maxMinutes);
+
         long millis = maxMinutes * 60 * 1000;
 
         // Set repeating alarm for periodic checks
