@@ -1,8 +1,10 @@
 // MainActivity.java
 package com.example.parentalcontrol;
 
+import android.app.admin.DevicePolicyManager;
 import android.app.AppOpsManager;
 import android.app.ProgressDialog;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -21,6 +23,7 @@ import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 
 import android.Manifest;
+import android.provider.Settings;
 import android.util.Log;
 import android.widget.FrameLayout;
 import android.widget.Toast;
@@ -29,14 +32,11 @@ import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 import org.greenrobot.eventbus.ThreadMode;
 
-import android.app.AppOpsManager;
-import android.provider.Settings;
-import android.content.Intent;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import android.os.Process;
-
 
 @RequiresApi(api = Build.VERSION_CODES.P)
 public class MainActivity extends AppCompatActivity {
@@ -48,8 +48,9 @@ public class MainActivity extends AppCompatActivity {
     };
     private static final int USAGE_STATS_PERMISSION_REQUEST = 1002;
     private static final int USAGE_STATS_REQUEST = 1001;
-    private AppUsageRepository repository;
+    private static final int REQUEST_CODE_ENABLE_ADMIN = 1003; // Unique request code for device admin
 
+    private AppUsageRepository repository;
     private ProgressDialog progressDialog;
     private FrameLayout fragmentContainer;
 
@@ -70,6 +71,18 @@ public class MainActivity extends AppCompatActivity {
 
         fragmentContainer = findViewById(R.id.fragment_container);
 
+        // Check if device admin is already enabled
+        DevicePolicyManager devicePolicyManager = (DevicePolicyManager) getSystemService(DEVICE_POLICY_SERVICE);
+        ComponentName adminComponentName = new ComponentName(this, DeviceAdminReceiverCustom.class);
+
+        if (!devicePolicyManager.isAdminActive(adminComponentName)) {
+            // Request admin privileges
+            Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+            intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponentName);
+            intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "This app needs device admin permissions to lock the device.");
+            startActivityForResult(intent, REQUEST_CODE_ENABLE_ADMIN);
+        }
+
         // Check critical permissions first
         if (!checkUsageStatsPermission()) {
             requestUsageStatsPermission();
@@ -83,6 +96,28 @@ public class MainActivity extends AppCompatActivity {
 
         // Only proceed if we have permissions
         initializeIfPermissionsGranted();
+
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == USAGE_STATS_REQUEST) {
+            if (checkUsageStatsPermission()) {
+                initializeIfPermissionsGranted();
+            } else {
+                Toast.makeText(this, "Usage stats permission required", Toast.LENGTH_LONG).show();
+                finish(); // Close app if permission not granted
+            }
+        } else if (requestCode == REQUEST_CODE_ENABLE_ADMIN) {
+            if (resultCode == RESULT_OK) {
+                // Device admin enabled
+                initializeApp();
+            } else {
+                // User denied device admin permissions
+                Toast.makeText(this, "Device admin permissions are required to lock the device.", Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     private void initializeIfPermissionsGranted() {
@@ -96,20 +131,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == USAGE_STATS_REQUEST) {
-            if (checkUsageStatsPermission()) {
-                initializeIfPermissionsGranted();
-            } else {
-                Toast.makeText(this, "Usage stats permission required", Toast.LENGTH_LONG).show();
-                finish(); // Close app if permission not granted
-            }
-        }
-    }
-
-    // In your initialization code:
     private void initializeApp() {
         // Check if we have an auth token
         String authToken = AppController.getInstance().getAuthToken();
@@ -118,6 +139,12 @@ public class MainActivity extends AppCompatActivity {
             showLoginScreen();
             return;
         }
+
+        // Log app usage data
+        AppUsageDatabaseHelper dbHelper = new AppUsageDatabaseHelper(this);
+        dbHelper.logScreenTimeRulesData();
+
+        logAllSharedPreferences();
 
         // Start services
         startForegroundServices();
@@ -159,7 +186,7 @@ public class MainActivity extends AppCompatActivity {
                         // Continue with app initialization
                         ScreenTimeManager screenTimeManager = ServiceLocator.getInstance(MainActivity.this)
                                 .getScreenTimeManager(MainActivity.this);
-                        screenTimeManager.setDailyLimit(120);
+                        screenTimeManager.setDailyLimit(1);
                     }
 
                     @Override
@@ -203,7 +230,6 @@ public class MainActivity extends AppCompatActivity {
                 "Attempt to open " + event.packageName + " was blocked");
     }
 
-    // In MainActivity.java
     private void startForegroundServices() {
         Log.d("SERVICE", "Attempting to start services...");
 
@@ -342,12 +368,12 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    // In MainActivity.java
     private void schedulePeriodicSync() {
         Constraints constraints = new Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build();
 
+        // Sync app usage and screen time every 15 minutes
         PeriodicWorkRequest syncRequest = new PeriodicWorkRequest.Builder(
                 DataSyncWorker.class,
                 15, // Every 15 minutes
@@ -358,11 +384,52 @@ public class MainActivity extends AppCompatActivity {
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
                 "data_sync",
-                ExistingPeriodicWorkPolicy.KEEP, // Or REPLACE depending on your needs
+                ExistingPeriodicWorkPolicy.KEEP,
                 syncRequest
         );
 
-        Log.d("SYNC", "Scheduled periodic sync");
+        // Additional worker for daily screen time calculation
+        PeriodicWorkRequest dailyScreenTimeRequest = new PeriodicWorkRequest.Builder(
+                ScreenTimeWorker.class,
+                24, // Every 24 hours
+                TimeUnit.HOURS
+        )
+                .setInitialDelay(1, TimeUnit.HOURS) // Start 1 hour after initial setup
+                .setConstraints(constraints)
+                .build();
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "daily_screen_time",
+                ExistingPeriodicWorkPolicy.KEEP,
+                dailyScreenTimeRequest
+        );
     }
 
+    public void logAllSharedPreferences() {
+        SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
+
+        // Get all keys from SharedPreferences
+        Map<String, ?> allPrefs = prefs.getAll();
+
+        // Log each key-value pair
+        for (Map.Entry<String, ?> entry : allPrefs.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+
+            // Log key and value (handling different types)
+            if (value instanceof String) {
+                Log.d("SharedPreferencesLog", key + ": " + value);
+            } else if (value instanceof Integer) {
+                Log.d("SharedPreferencesLog", key + ": " + (Integer) value);
+            } else if (value instanceof Boolean) {
+                Log.d("SharedPreferencesLog", key + ": " + (Boolean) value);
+            } else if (value instanceof Float) {
+                Log.d("SharedPreferencesLog", key + ": " + (Float) value);
+            } else if (value instanceof Long) {
+                Log.d("SharedPreferencesLog", key + ": " + (Long) value);
+            } else {
+                Log.d("SharedPreferencesLog", key + ": " + value.toString());
+            }
+        }
+    }
 }
