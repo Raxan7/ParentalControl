@@ -7,17 +7,27 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import android.provider.Settings;
 
 import androidx.core.app.NotificationCompat;
 
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 import org.greenrobot.eventbus.ThreadMode;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.OkHttpClient;
+import okhttp3.Response;
+import okhttp3.Request;
 
 public class DataSyncService extends Service {
     private static final String CHANNEL_ID = "data_sync_channel";
@@ -48,19 +58,77 @@ public class DataSyncService extends Service {
     private void performSync() {
         String authToken = AppController.getInstance().getAuthToken();
         if (authToken != null && !authToken.isEmpty()) {
-            DataSync.syncAppUsage(this, authToken, new DataSync.SyncCallback() {
+            // Sync screen time rules first
+            syncScreenTimeRules(authToken, new DataSync.SyncCallback() {
                 @Override
                 public void onSuccess() {
-                    Log.d("DataSyncService", "Sync completed successfully");
+                    // Then sync app usage
+                    DataSync.syncAppUsage(DataSyncService.this, authToken, new DataSync.SyncCallback() {
+                        @Override
+                        public void onSuccess() {
+                            Log.d("DataSyncService", "App usage sync completed");
+                            // Finally sync screen time data
+                            new ScreenTimeManager(DataSyncService.this).checkAndSyncScreenTime();
+                        }
+
+                        @Override
+                        public void onFailure(Exception e) {
+                            Log.e("DataSyncService", "App usage sync failed", e);
+                            ErrorHandler.handleApiError(DataSyncService.this, e, "data_sync");
+                        }
+                    });
                 }
 
                 @Override
                 public void onFailure(Exception e) {
-                    Log.e("DataSyncService", "Sync failed", e);
-                    ErrorHandler.handleApiError(DataSyncService.this, e, "data_sync");
+                    Log.e("DataSyncService", "Screen time rules sync failed", e);
+                    ErrorHandler.handleApiError(DataSyncService.this, e, "screen_time_rules_sync");
                 }
             });
         }
+    }
+
+    private void syncScreenTimeRules(String authToken, DataSync.SyncCallback callback) {
+        new Thread(() -> {
+            try {
+                OkHttpClient client = new OkHttpClient.Builder()
+                        .connectTimeout(10, TimeUnit.SECONDS)
+                        .readTimeout(10, TimeUnit.SECONDS)
+                        .build();
+
+                @SuppressLint("HardwareIds") String deviceId = Settings.Secure.getString(
+                        getContentResolver(),
+                        Settings.Secure.ANDROID_ID
+                );
+
+                Request request = new Request.Builder()
+                        .url(AuthService.BASE_URL + "api/get-screen-time-rules/" + deviceId + "/")
+                        .addHeader("Authorization", "Bearer " + authToken)
+                        .build();
+
+                Response response = client.newCall(request).execute();
+                if (response.isSuccessful()) {
+                    String responseBody = response.body().string();
+                    JSONObject json = new JSONObject(responseBody);
+
+                    long dailyLimit = json.getLong("daily_limit_minutes");
+
+                    // Save to shared preferences
+                    SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
+                    prefs.edit().putLong("daily_limit_minutes", dailyLimit).apply();
+
+                    // Update the screen time manager
+                    ScreenTimeManager screenTimeManager = new ScreenTimeManager(this);
+                    screenTimeManager.setDailyLimit(dailyLimit);
+
+                    new Handler(Looper.getMainLooper()).post(callback::onSuccess);
+                } else {
+                    throw new IOException("Failed to get screen time rules: " + response.message());
+                }
+            } catch (Exception e) {
+                new Handler(Looper.getMainLooper()).post(() -> callback.onFailure(e));
+            }
+        }).start();
     }
 
     private void createNotificationChannel() {
