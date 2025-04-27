@@ -13,6 +13,7 @@ import okhttp3.*;
 
 public class AuthService {
     public static final String BASE_URL = "http://192.168.1.147:8080/";
+//    public static final String BASE_URL = "https://parental-control-system.onrender.com/";
     public static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     public interface AuthCallback {
@@ -40,10 +41,16 @@ public class AuthService {
                 Response response = client.newCall(request).execute();
                 String responseBody = response.body().string();
 
+                Log.d("TOKEN", String.valueOf((response.isSuccessful())));
                 if (response.isSuccessful()) {
                     JSONObject tokens = new JSONObject(responseBody);
+                    Log.d("TOKEN", tokens.toString());
+
                     String accessToken = tokens.getString("access");
                     String refreshToken = tokens.getString("refresh");
+
+                    // Store the access token in AppController
+                    AppController.getInstance().setAuthToken(accessToken);
 
                     new Handler(Looper.getMainLooper()).post(() ->
                             callback.onSuccess(accessToken, refreshToken));
