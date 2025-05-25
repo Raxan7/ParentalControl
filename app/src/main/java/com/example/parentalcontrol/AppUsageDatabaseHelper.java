@@ -32,8 +32,8 @@ public class AppUsageDatabaseHelper extends SQLiteOpenHelper {
         // New screen time tables
         db.execSQL("CREATE TABLE screen_time (" +
                 "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "date TEXT," +  // YYYY-MM-DD format
-                "total_minutes INTEGER," +
+                "timestamp TEXT," + // yyyy-MM-dd HH:mm format, not just date
+                "minutes INTEGER," + // one-minute chunks
                 "sync_status INTEGER DEFAULT 0)");
 
         db.execSQL("CREATE TABLE screen_time_rules (" +
@@ -62,14 +62,15 @@ public class AppUsageDatabaseHelper extends SQLiteOpenHelper {
     }
 
     // Add these new methods to AppUsageDatabaseHelper
-    public void saveDailyScreenTime(String date, int totalMinutes) {
+    public void saveScreenTimeMinute(String timestamp, int minutes) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues values = new ContentValues();
-        values.put("date", date);
-        values.put("total_minutes", totalMinutes);
+        values.put("timestamp", timestamp);
+        values.put("minutes", minutes);
         db.insert("screen_time", null, values);
         db.close();
     }
+
 
     public void updateScreenTimeSyncStatus(String date, int syncStatus) {
         SQLiteDatabase db = getWritableDatabase();

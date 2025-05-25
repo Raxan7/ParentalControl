@@ -29,4 +29,12 @@ public class ServiceLocator {
     public ScreenTimeManager getScreenTimeManager(Context context) {
         return new ScreenTimeManager(context);
     }
+
+    public ScreenTimeRepository getScreenTimeRepository(Context context) {
+        return new ScreenTimeRepository(context);
+    }
+
+    public ScreenTimeSync getScreenTimeSync(Context context) {
+        return new ScreenTimeSync(context);
+    }
 }

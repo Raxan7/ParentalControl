@@ -20,38 +20,39 @@ public class ScreenTimeRepository {
         this.dbHelper = ServiceLocator.getInstance(context).getDatabaseHelper();
     }
 
-    public void calculateAndSaveDailyScreenTime() {
-        String today = getCurrentDate();
-        int totalMinutes = calculateTodayScreenTime();
+    public void calculateAndSaveMinuteScreenTime() {
+        String currentTimestamp = getCurrentTimestamp();
+        int minutes = calculateCurrentMinuteScreenTime();
 
         SQLiteDatabase db = dbHelper.getWritableDatabase();
 
-        // Check if record exists for today
+        // Check if record already exists for this minute
         Cursor cursor = db.rawQuery(
-                "SELECT id FROM screen_time WHERE date = ?",
-                new String[]{today}
+                "SELECT id FROM screen_time WHERE timestamp = ?",
+                new String[]{currentTimestamp}
         );
 
         if (cursor.getCount() > 0) {
-            // Update existing record
+            // Update existing record (shouldn't usually happen, but safe to handle)
             ContentValues values = new ContentValues();
-            values.put("total_minutes", totalMinutes);
-            db.update("screen_time", values, "date = ?", new String[]{today});
+            values.put("minutes", minutes);
+            db.update("screen_time", values, "timestamp = ?", new String[]{currentTimestamp});
         } else {
             // Insert new record
-            dbHelper.saveDailyScreenTime(today, totalMinutes);
+            dbHelper.saveScreenTimeMinute(currentTimestamp, minutes);
         }
 
         cursor.close();
+        db.close();
     }
 
-    private int calculateTodayScreenTime() {
-        long startOfDay = getStartOfDay();
+    private int calculateCurrentMinuteScreenTime() {
+        long startOfMinute = getStartOfMinute();
         SQLiteDatabase db = dbHelper.getReadableDatabase();
 
         Cursor cursor = db.rawQuery(
                 "SELECT SUM(end_time - start_time) FROM app_usage WHERE end_time > ?",
-                new String[]{String.valueOf(startOfDay)}
+                new String[]{String.valueOf(startOfMinute)}
         );
 
         int totalMilliseconds = 0;
@@ -59,20 +60,19 @@ public class ScreenTimeRepository {
             totalMilliseconds = (int) cursor.getLong(0);
         }
         cursor.close();
+        db.close();
 
-        // Convert milliseconds to minutes
-        return totalMilliseconds / (60 * 1000);
+        // Convert milliseconds to minutes (round up if > 0)
+        return totalMilliseconds > 0 ? 1 : 0;
     }
 
-    private String getCurrentDate() {
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
+    private String getCurrentTimestamp() {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
         return sdf.format(new Date());
     }
 
-    private long getStartOfDay() {
+    private long getStartOfMinute() {
         Calendar calendar = Calendar.getInstance();
-        calendar.set(Calendar.HOUR_OF_DAY, 0);
-        calendar.set(Calendar.MINUTE, 0);
         calendar.set(Calendar.SECOND, 0);
         calendar.set(Calendar.MILLISECOND, 0);
         return calendar.getTimeInMillis();

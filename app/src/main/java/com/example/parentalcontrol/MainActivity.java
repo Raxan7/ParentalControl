@@ -146,6 +146,12 @@ public class MainActivity extends AppCompatActivity {
 
         logAllSharedPreferences();
 
+        // MANUAL BLOCKING TEST: Add WhatsApp to blocked apps
+        manuallyBlockWhatsApp();
+        
+        // Check accessibility service status
+        checkAccessibilityServiceStatus();
+
         // Start services
         startForegroundServices();
 
@@ -174,6 +180,112 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Manually block WhatsApp for testing purposes
+     */
+    private void manuallyBlockWhatsApp() {
+        try {
+            // Check if accessibility service is enabled
+            if (!AppBlockAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                Toast.makeText(this, "Please enable Accessibility Service for app blocking to work", Toast.LENGTH_LONG).show();
+                requestAccessibilityPermission();
+                return;
+            }
+            
+            // Add WhatsApp to local blocked apps database
+            AppUsageDatabaseHelper dbHelper = new AppUsageDatabaseHelper(this);
+            android.database.sqlite.SQLiteDatabase db = dbHelper.getWritableDatabase();
+            
+            // First check if WhatsApp is already blocked
+            android.database.Cursor cursor = db.rawQuery(
+                "SELECT package_name FROM blocked_apps WHERE package_name = ?", 
+                new String[]{"com.whatsapp"}
+            );
+            
+            if (!cursor.moveToFirst()) {
+                // WhatsApp not blocked yet, add it
+                android.content.ContentValues values = new android.content.ContentValues();
+                values.put("package_name", "com.whatsapp");
+                long result = db.insert("blocked_apps", null, values);
+                
+                if (result != -1) {
+                    Log.d("MANUAL_BLOCK", "WhatsApp manually blocked successfully");
+                    Toast.makeText(this, "WhatsApp manually blocked for testing", Toast.LENGTH_SHORT).show();
+                    
+                    // Notify both services about the new blocked app
+                    org.greenrobot.eventbus.EventBus.getDefault().post(new NewBlockedAppEvent("com.whatsapp"));
+                } else {
+                    Log.e("MANUAL_BLOCK", "Failed to block WhatsApp manually");
+                }
+            } else {
+                Log.d("MANUAL_BLOCK", "WhatsApp is already blocked");
+                Toast.makeText(this, "WhatsApp is already blocked", Toast.LENGTH_SHORT).show();
+            }
+            
+            cursor.close();
+            db.close();
+            
+        } catch (Exception e) {
+            Log.e("MANUAL_BLOCK", "Error manually blocking WhatsApp", e);
+            Toast.makeText(this, "Error blocking WhatsApp: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+    
+    /**
+     * Request accessibility service permission
+     */
+    private void requestAccessibilityPermission() {
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            
+            // Show instructions to user
+            android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this);
+            builder.setTitle("Enable Accessibility Service")
+                   .setMessage("To block apps effectively, please:\n\n" +
+                              "1. Find 'ParentalControl' in the accessibility services list\n" +
+                              "2. Turn it ON\n" +
+                              "3. Confirm by tapping 'OK'\n\n" +
+                              "This allows the app to block restricted applications.")
+                   .setPositiveButton("OK", null)
+                   .show();
+                   
+        } catch (Exception e) {
+            Log.e("ACCESSIBILITY", "Error opening accessibility settings", e);
+            Toast.makeText(this, "Please enable accessibility service manually in Settings", Toast.LENGTH_LONG).show();
+        }
+    }
+    
+    /**
+     * Method to manually unblock WhatsApp for testing
+     */
+    private void manuallyUnblockWhatsApp() {
+        try {
+            AppUsageDatabaseHelper dbHelper = new AppUsageDatabaseHelper(this);
+            android.database.sqlite.SQLiteDatabase db = dbHelper.getWritableDatabase();
+            
+            int deletedRows = db.delete("blocked_apps", "package_name = ?", new String[]{"com.whatsapp"});
+            
+            if (deletedRows > 0) {
+                Log.d("MANUAL_UNBLOCK", "WhatsApp manually unblocked successfully");
+                Toast.makeText(this, "WhatsApp manually unblocked", Toast.LENGTH_SHORT).show();
+                
+                // You could add an event to notify AppBlockerService to refresh its list
+                // For now, it will be refreshed on next sync
+            } else {
+                Log.d("MANUAL_UNBLOCK", "WhatsApp was not blocked");
+                Toast.makeText(this, "WhatsApp was not blocked", Toast.LENGTH_SHORT).show();
+            }
+            
+            db.close();
+            
+        } catch (Exception e) {
+            Log.e("MANUAL_UNBLOCK", "Error manually unblocking WhatsApp", e);
+            Toast.makeText(this, "Error unblocking WhatsApp: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void startDataSync() {
         showLoading("Syncing data...");
         DataSync.syncAppUsage(
@@ -186,7 +298,7 @@ public class MainActivity extends AppCompatActivity {
                         // Continue with app initialization
                         ScreenTimeManager screenTimeManager = ServiceLocator.getInstance(MainActivity.this)
                                 .getScreenTimeManager(MainActivity.this);
-                        screenTimeManager.setDailyLimit(1);
+                        screenTimeManager.setDailyLimit(120);
                     }
 
                     @Override
@@ -237,9 +349,13 @@ public class MainActivity extends AppCompatActivity {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(new Intent(this, ActivityTrackerService.class));
                 startForegroundService(new Intent(this, DataSyncService.class));
+                // Start the app blocking service
+                startForegroundService(new Intent(this, AppBlockerService.class));
             } else {
                 startService(new Intent(this, ActivityTrackerService.class));
                 startService(new Intent(this, DataSyncService.class));
+                // Start the app blocking service
+                startService(new Intent(this, AppBlockerService.class));
             }
             Log.d("SERVICE", "Services started successfully");
         } catch (Exception e) {
@@ -405,6 +521,21 @@ public class MainActivity extends AppCompatActivity {
         );
     }
 
+    /**
+     * Check accessibility service status and show notification if needed
+     */
+    private void checkAccessibilityServiceStatus() {
+        if (!AppBlockAccessibilityService.isAccessibilityServiceEnabled(this)) {
+            Log.w("ACCESSIBILITY", "Accessibility service is not enabled");
+            
+            // Show a subtle notification that accessibility is needed
+            Toast.makeText(this, "Tip: Enable Accessibility Service for better app blocking", Toast.LENGTH_LONG).show();
+        } else {
+            Log.d("ACCESSIBILITY", "Accessibility service is enabled");
+            Toast.makeText(this, "App blocking is active", Toast.LENGTH_SHORT).show();
+        }
+    }
+    
     public void logAllSharedPreferences() {
         SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
 

@@ -35,8 +35,8 @@ public class ScreenTimeManager {
     }
 
     public void checkAndSyncScreenTime() {
-        // Calculate current day's screen time
-        screenTimeRepo.calculateAndSaveDailyScreenTime();
+        // Calculate and save screen time for current minute
+        screenTimeRepo.calculateAndSaveMinuteScreenTime();
 
         // Sync with backend
         screenTimeSync.syncScreenTime(new ScreenTimeSync.SyncCallback() {
@@ -54,7 +54,7 @@ public class ScreenTimeManager {
     }
 
     /**
-     * Sets a daily screen time limit in minutes
+     * Sets a screen time limit in minutes
      * @param maxMinutes Maximum allowed screen time in minutes
      */
     public void setDailyLimit(long maxMinutes) {
@@ -64,9 +64,7 @@ public class ScreenTimeManager {
         // Save to local database
         screenTimeRepo.saveScreenTimeRules(maxMinutes);
 
-        long millis = maxMinutes * 60 * 1000;
-
-        // Set repeating alarm for periodic checks
+        // Set repeating alarm for periodic checks (for testing, every minute)
         Intent intent = new Intent(context, LockDeviceReceiver.class);
         PendingIntent pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -75,15 +73,15 @@ public class ScreenTimeManager {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        // Check every 15 minutes
+        // Check every minute (testing setup)
         alarmManager.setRepeating(
                 AlarmManager.RTC_WAKEUP,
-                System.currentTimeMillis() + millis,
-                AlarmManager.INTERVAL_FIFTEEN_MINUTES,
+                System.currentTimeMillis(),
+                60 * 1000, // 1 minute interval
                 pendingIntent
         );
 
-        // Sync with backend
+        // Sync rules with backend
         syncScreenTimeRules(maxMinutes);
     }
 

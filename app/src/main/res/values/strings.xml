@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">ParentalControl</string>
+    <string name="accessibility_service_description">This service monitors app launches to block restricted applications as configured by parental controls. It only activates when a blocked app is detected and immediately returns the user to the home screen.</string>
 </resources>

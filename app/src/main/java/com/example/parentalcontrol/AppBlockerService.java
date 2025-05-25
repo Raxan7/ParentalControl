@@ -39,6 +39,10 @@ public class AppBlockerService extends Service {
         EventBus.getDefault().register(this);
         activityManager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
         handler = new Handler();
+        
+        // Load blocked apps from local database first
+        loadBlockedAppsFromDatabase();
+        
         startMonitoring();
         syncBlockedApps();
     }
@@ -101,6 +105,29 @@ public class AppBlockerService extends Service {
         }).start();
     }
 
+    private void loadBlockedAppsFromDatabase() {
+        try {
+            SQLiteDatabase db = new AppUsageDatabaseHelper(this).getReadableDatabase();
+            Cursor cursor = db.rawQuery("SELECT package_name FROM blocked_apps", null);
+            
+            synchronized (blockedPackages) {
+                blockedPackages.clear();
+                while (cursor.moveToNext()) {
+                    String packageName = cursor.getString(0);
+                    blockedPackages.add(packageName);
+                    Log.d("AppBlocker", "Loaded blocked app from database: " + packageName);
+                }
+            }
+            
+            cursor.close();
+            db.close();
+            
+            Log.d("AppBlocker", "Loaded " + blockedPackages.size() + " blocked apps from database");
+        } catch (Exception e) {
+            Log.e("AppBlocker", "Error loading blocked apps from database", e);
+        }
+    }
+
     private void saveBlockedAppsToDatabase(List<String> packageNames) {
         SQLiteDatabase db = new AppUsageDatabaseHelper(this).getWritableDatabase();
         db.beginTransaction();
@@ -122,17 +149,33 @@ public class AppBlockerService extends Service {
     }
 
     private void checkForegroundApp() {
+        // Only do basic checking if accessibility service is not available
+        if (AppBlockAccessibilityService.isAccessibilityServiceEnabled(this)) {
+            // Accessibility service is handling the blocking, we just log
+            return;
+        }
+        
         List<ActivityManager.RunningTaskInfo> tasks = activityManager.getRunningTasks(1);
         if (!tasks.isEmpty()) {
             String packageName = tasks.get(0).topActivity.getPackageName();
 
             synchronized (blockedPackages) {
                 if (blockedPackages.contains(packageName)) {
-                    // App is blocked - close it
+                    Log.d("AppBlocker", "Blocking app (fallback method): " + packageName);
+                    
+                    // Multiple methods to block the app
                     activityManager.killBackgroundProcesses(packageName);
+                    
+                    // Send user to home screen
+                    Intent homeIntent = new Intent(Intent.ACTION_MAIN);
+                    homeIntent.addCategory(Intent.CATEGORY_HOME);
+                    homeIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(homeIntent);
 
                     // Notify user
                     EventBus.getDefault().post(new BlockedAppEvent(packageName));
+                    
+                    Log.d("AppBlocker", "Successfully blocked and closed (fallback): " + packageName);
                 }
             }
         }
@@ -152,11 +195,11 @@ public class AppBlockerService extends Service {
 
     @Subscribe
     public void onNewBlockedApp(NewBlockedAppEvent event) {
-        // Immediately add to blocked list
-        synchronized (blockedPackages) {
-            if (!blockedPackages.contains(event.packageName)) {
-                blockedPackages.add(event.packageName);
-            }
-        }
+        Log.d("AppBlocker", "Received new blocked app event: " + event.packageName);
+        
+        // Reload blocked apps from database to get latest changes
+        loadBlockedAppsFromDatabase();
+        
+        Log.d("AppBlocker", "Updated blocked apps list. Total blocked apps: " + blockedPackages.size());
     }
 }
