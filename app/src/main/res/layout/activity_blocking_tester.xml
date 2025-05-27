@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:text="App Blocking Diagnostics"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/btn_check_services"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Check Services Status"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/btn_force_sync"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Force Sync Blocked Apps"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/btn_test_blocking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Test Blocking Flow"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/btn_accessibility_settings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Open Accessibility Settings"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Status:"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#f0f0f0">
+
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:fontFamily="monospace"
+            android:textSize="12sp" />
+    </ScrollView>
+
+</LinearLayout>

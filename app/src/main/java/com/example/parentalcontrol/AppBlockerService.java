@@ -4,7 +4,10 @@ import android.annotation.SuppressLint;
 import android.app.ActivityManager;
 import android.app.Service;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.os.Handler;
@@ -40,11 +43,16 @@ public class AppBlockerService extends Service {
         activityManager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
         handler = new Handler();
         
+        // Register this service with the AppController
+        AppController.getInstance().setAppBlockerService(this);
+        
         // Load blocked apps from local database first
         loadBlockedAppsFromDatabase();
         
         startMonitoring();
         syncBlockedApps();
+        
+        Log.d("AppBlocker", "Service created and registered with AppController");
     }
 
     private void startMonitoring() {
@@ -185,6 +193,9 @@ public class AppBlockerService extends Service {
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         EventBus.getDefault().unregister(this);
+        // Unregister from AppController
+        AppController.getInstance().setAppBlockerService(null);
+        Log.d("AppBlocker", "Service destroyed and unregistered from AppController");
         super.onDestroy();
     }
 
@@ -201,5 +212,151 @@ public class AppBlockerService extends Service {
         loadBlockedAppsFromDatabase();
         
         Log.d("AppBlocker", "Updated blocked apps list. Total blocked apps: " + blockedPackages.size());
+    }
+    
+    @Subscribe
+    public void onBlockedAppsUpdated(BlockedAppsUpdatedEvent event) {
+        Log.d("AppBlocker", "Received blocked apps updated event");
+        
+        // Reload blocked apps from database to get latest changes
+        List<String> oldBlockedPackages = new ArrayList<>(blockedPackages);
+        loadBlockedAppsFromDatabase();
+        
+        // Find newly added blocks
+        List<String> newlyAddedBlocks = new ArrayList<>();
+        for (String packageName : blockedPackages) {
+            if (!oldBlockedPackages.contains(packageName)) {
+                newlyAddedBlocks.add(packageName);
+            }
+        }
+        
+        // Find removed blocks
+        List<String> removedBlocks = new ArrayList<>();
+        for (String packageName : oldBlockedPackages) {
+            if (!blockedPackages.contains(packageName)) {
+                removedBlocks.add(packageName);
+            }
+        }
+        
+        // Log detailed information
+        Log.d("AppBlocker", "Refreshed blocked apps list from database. Total blocked apps: " + blockedPackages.size());
+        
+        if (!newlyAddedBlocks.isEmpty()) {
+            Log.d("AppBlocker", "Newly blocked apps: " + newlyAddedBlocks.toString());
+            
+            // Log debugging info
+            BlockingDebugger.log("New app blocks added: " + newlyAddedBlocks);
+            
+            // Check if any of these newly blocked apps are currently running and enforce blocking
+            for (String newlyBlocked : newlyAddedBlocks) {
+                enforceBlocking(newlyBlocked);
+            }
+        }
+        
+        if (!removedBlocks.isEmpty()) {
+            Log.d("AppBlocker", "Unblocked apps: " + removedBlocks.toString());
+            BlockingDebugger.log("Apps unblocked: " + removedBlocks);
+        }
+    }
+    
+    /**
+     * Enforce blocking for a specific package immediately
+     */
+    private void enforceBlocking(String packageName) {
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            
+            // Get foreground app
+            String foregroundApp = getForegroundPackage();
+            
+            // Check if the newly blocked app is currently in foreground
+            if (foregroundApp != null && foregroundApp.equals(packageName)) {
+                Log.d("AppBlocker", "Enforcing immediate blocking for: " + packageName);
+                BlockingDebugger.log("Enforcing immediate block on foreground app: " + packageName);
+                
+                // Go to home screen
+                Intent homeIntent = new Intent(Intent.ACTION_MAIN);
+                homeIntent.addCategory(Intent.CATEGORY_HOME);
+                homeIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(homeIntent);
+                
+                // Show blocking notification
+                AlertNotifier.showNotification(
+                    this,
+                    "App Blocked",
+                    "Access to " + getAppNameFromPackage(packageName) + " has been restricted"
+                );
+            }
+        } catch (Exception e) {
+            Log.e("AppBlocker", "Error enforcing immediate blocking", e);
+        }
+    }
+    
+    /**
+     * Get user-friendly app name from package name
+     */
+    private String getAppNameFromPackage(String packageName) {
+        try {
+            PackageManager pm = getPackageManager();
+            ApplicationInfo ai = pm.getApplicationInfo(packageName, 0);
+            return (String) pm.getApplicationLabel(ai);
+        } catch (Exception e) {
+            return packageName;
+        }
+    }
+    
+    /**
+     * Get the package name of the foreground app
+     */
+    private String getForegroundPackage() {
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            
+            // For Android 10 (API 29) and above, we can only get our own app's tasks
+            // or use the UsageStatsManager which requires special permissions
+            // Here we'll use a simplified approach that works in older versions
+            List<ActivityManager.RunningAppProcessInfo> processes = am.getRunningAppProcesses();
+            if (processes != null) {
+                for (ActivityManager.RunningAppProcessInfo process : processes) {
+                    if (process.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+                        if (process.pkgList.length > 0) {
+                            return process.pkgList[0];
+                        }
+                    }
+                }
+            }
+            
+            // Fallback for older versions
+            @SuppressWarnings("deprecation")
+            List<ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(1);
+            if (tasks != null && !tasks.isEmpty()) {
+                return tasks.get(0).topActivity.getPackageName();
+            }
+        } catch (Exception e) {
+            Log.e("AppBlocker", "Error getting foreground app", e);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Checks the current foreground app and blocks it if it's in the blocked list
+     * Called when we need immediate enforcement after a sync
+     */
+    public void checkAndBlockCurrentApp() {
+        try {
+            String foregroundPackage = getForegroundPackage();
+            if (foregroundPackage != null) {
+                Log.d("AppBlocker", "Checking if we need to block current app: " + foregroundPackage);
+                
+                // Check if this app is blocked
+                if (blockedPackages.contains(foregroundPackage)) {
+                    Log.d("AppBlocker", "Current app is blocked, enforcing block: " + foregroundPackage);
+                    enforceBlocking(foregroundPackage);
+                }
+            }
+        } catch (Exception e) {
+            Log.e("AppBlocker", "Error checking current app", e);
+        }
     }
 }

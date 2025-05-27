@@ -8,6 +8,9 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.util.Log;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class AppUsageDatabaseHelper extends SQLiteOpenHelper {
     private static final String DB_NAME = "AppUsage.db";
     private static final int DB_VERSION = 1;
@@ -100,6 +103,32 @@ public class AppUsageDatabaseHelper extends SQLiteOpenHelper {
 
     public Context getContext() {
         return context;
+    }
+
+    /**
+     * Get all blocked package names from the database
+     * @return List of blocked package names
+     */
+    public List<String> getAllBlockedPackages() {
+        List<String> blockedPackages = new ArrayList<>();
+        SQLiteDatabase db = this.getReadableDatabase();
+
+        try {
+            Cursor cursor = db.rawQuery("SELECT package_name FROM blocked_apps", null);
+
+            while (cursor.moveToNext()) {
+                String packageName = cursor.getString(0);
+                blockedPackages.add(packageName);
+            }
+
+            cursor.close();
+        } catch (Exception e) {
+            Log.e("AppUsageDB", "Error getting blocked packages", e);
+        } finally {
+            db.close();
+        }
+
+        return blockedPackages;
     }
 
     public void logScreenTimeRulesData() {

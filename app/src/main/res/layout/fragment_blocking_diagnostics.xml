@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Blocking Diagnostics"
+        android:textStyle="bold"
+        android:textSize="18sp"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/btn_test_immediate_blocking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Test Immediate Blocking"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/btn_force_sync"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Force Sync Blocked Apps"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/btn_toggle_debug"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Toggle Debug Mode"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Debug Logs:"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#f5f5f5">
+
+        <TextView
+            android:id="@+id/tv_debug_logs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:fontFamily="monospace"
+            android:textSize="12sp" />
+    </ScrollView>
+
+    <Button
+        android:id="@+id/btn_clear_logs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Clear Logs"
+        android:layout_marginTop="8dp" />
+
+</LinearLayout>

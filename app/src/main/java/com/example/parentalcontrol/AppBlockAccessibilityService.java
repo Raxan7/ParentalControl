@@ -142,6 +142,80 @@ public class AppBlockAccessibilityService extends AccessibilityService {
         loadBlockedAppsFromDatabase();
         Log.d(TAG, "Updated blocked apps list. Total: " + blockedPackages.size());
     }
+    
+    @org.greenrobot.eventbus.Subscribe
+    public void onBlockedAppsUpdated(BlockedAppsUpdatedEvent event) {
+        Log.d(TAG, "Received blocked apps updated event");
+        loadBlockedAppsFromDatabase();
+        Log.d(TAG, "Refreshed blocked apps list from database. Total: " + blockedPackages.size());
+        
+        // Ensure we're enforcing blocking rules immediately
+        checkCurrentForegroundApp();
+    }
+    
+    private void checkCurrentForegroundApp() {
+        try {
+            // This will immediately check the current foreground app
+            // and block it if it matches our block list
+            AccessibilityEvent dummyEvent = AccessibilityEvent.obtain();
+            dummyEvent.setEventType(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
+            
+            // Get current foreground package using UsageStats or other methods
+            String currentPackage = getCurrentForegroundPackage();
+            if (currentPackage != null) {
+                dummyEvent.setPackageName(currentPackage);
+                onAccessibilityEvent(dummyEvent);
+            }
+            
+            dummyEvent.recycle();
+        } catch (Exception e) {
+            Log.e(TAG, "Error checking current app", e);
+        }
+    }
+    
+    private String getCurrentForegroundPackage() {
+        try {
+            // Multiple ways to get foreground app
+            // Method 1: Use ActivityManager (legacy)
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.LOLLIPOP) {
+                @SuppressWarnings("deprecation")
+                android.app.ActivityManager.RunningTaskInfo foregroundTaskInfo = am.getRunningTasks(1).get(0);
+                return foregroundTaskInfo.topActivity.getPackageName();
+            }
+            
+            // Method 2: Use UsageStatsManager (Android 5.0+)
+            // Requires PACKAGE_USAGE_STATS permission
+            final long USAGE_STATS_INTERVAL = 1000 * 60; // 1 minute
+            
+            android.app.usage.UsageStatsManager usageStatsManager = 
+                (android.app.usage.UsageStatsManager) getSystemService("usagestats");
+            long time = System.currentTimeMillis();
+            
+            android.app.usage.UsageEvents usageEvents = usageStatsManager.queryEvents(
+                time - USAGE_STATS_INTERVAL, time);
+            android.app.usage.UsageEvents.Event event = new android.app.usage.UsageEvents.Event();
+            String lastPackage = null;
+            
+            while (usageEvents.hasNextEvent()) {
+                usageEvents.getNextEvent(event);
+                if (event.getEventType() == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                    lastPackage = event.getPackageName();
+                }
+            }
+            
+            if (lastPackage != null) {
+                return lastPackage;
+            }
+            
+            // Fallback method - less reliable
+            return am.getRunningAppProcesses().get(0).processName;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error getting foreground package", e);
+            return null;
+        }
+    }
 
     @Override
     public void onInterrupt() {
