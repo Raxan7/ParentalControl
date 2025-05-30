@@ -65,7 +65,12 @@ public class ScreenTimeCountdownFragment extends Fragment {
         // Register broadcast receiver
         IntentFilter filter = new IntentFilter("com.example.parentalcontrol.SCREEN_TIME_UPDATE");
         if (getContext() != null) {
-            getContext().registerReceiver(screenTimeUpdateReceiver, filter);
+            androidx.core.content.ContextCompat.registerReceiver(
+                getContext(), 
+                screenTimeUpdateReceiver, 
+                filter, 
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            );
         }
         
         // Start the countdown service if not already running

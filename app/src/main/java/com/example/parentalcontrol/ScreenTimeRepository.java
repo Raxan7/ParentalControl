@@ -90,17 +90,49 @@ public class ScreenTimeRepository {
     public long getDailyLimit() {
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         Cursor cursor = db.rawQuery(
-                "SELECT daily_limit_minutes FROM screen_time_rules ORDER BY last_updated DESC LIMIT 1",
+                "SELECT daily_limit_minutes, last_updated FROM screen_time_rules ORDER BY last_updated DESC LIMIT 1",
                 null
         );
 
         long dailyLimit = 120; // Default 120 minutes
         if (cursor.moveToFirst()) {
             dailyLimit = cursor.getLong(0);
+            long lastUpdated = cursor.getLong(1);
+            Log.d("ScreenTimeRepository", "Found daily limit in database: " + dailyLimit + " minutes (updated at: " + lastUpdated + ")");
+        } else {
+            Log.d("ScreenTimeRepository", "No daily limit found in database, using default: " + dailyLimit + " minutes");
         }
         cursor.close();
         db.close();
+        
+        // Also check all screen time rules for debugging
+        logAllScreenTimeRules();
+        
         return dailyLimit;
+    }
+    
+    /**
+     * Debug method to log all screen time rules
+     */
+    private void logAllScreenTimeRules() {
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        Cursor cursor = db.rawQuery(
+                "SELECT daily_limit_minutes, last_updated FROM screen_time_rules ORDER BY last_updated DESC",
+                null
+        );
+        
+        Log.d("ScreenTimeRepository", "=== ALL SCREEN TIME RULES ===");
+        int count = 0;
+        while (cursor.moveToNext()) {
+            long limit = cursor.getLong(0);
+            long updated = cursor.getLong(1);
+            Log.d("ScreenTimeRepository", "Rule " + (++count) + ": " + limit + " minutes (updated: " + updated + ")");
+        }
+        Log.d("ScreenTimeRepository", "Total rules found: " + count);
+        Log.d("ScreenTimeRepository", "=== END SCREEN TIME RULES ===");
+        
+        cursor.close();
+        db.close();
     }
 
     /**

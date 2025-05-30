@@ -2,6 +2,11 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
+        android:id="@+id/menu_screen_time_today"
+        android:title="Screen Time Today"
+        android:orderInCategory="10"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/menu_reset_screen_time"
         android:title="Reset Screen Time Limit"
         android:orderInCategory="50"

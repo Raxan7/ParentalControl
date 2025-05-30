@@ -519,7 +519,11 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == R.id.menu_diagnostics) {
+        if (item.getItemId() == R.id.menu_screen_time_today) {
+            // Load the Screen Time Today fragment
+            loadScreenTimeCountdownFragment();
+            return true;
+        } else if (item.getItemId() == R.id.menu_diagnostics) {
             // Launch the BlockingTesterActivity
             Intent intent = new Intent(this, BlockingTesterActivity.class);
             startActivity(intent);

@@ -59,6 +59,8 @@ public class ScreenTimeManager {
      * @param maxMinutes Maximum allowed screen time in minutes
      */
     public void setDailyLimit(long maxMinutes) {
+        Log.d("ScreenTimeManager", "Setting daily limit to: " + maxMinutes + " minutes");
+        
         SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
         prefs.edit().putLong("daily_limit_minutes", maxMinutes).apply();
 
@@ -81,6 +83,8 @@ public class ScreenTimeManager {
                 60 * 1000, // 1 minute interval
                 pendingIntent
         );
+
+        Log.d("ScreenTimeManager", "Daily limit set successfully. Alarm scheduled for periodic checks.");
 
         // Sync rules with backend
         syncScreenTimeRules(maxMinutes);
@@ -164,12 +168,26 @@ public class ScreenTimeManager {
         // Use the new calculator for more accurate calculation
         ScreenTimeCalculator calculator = new ScreenTimeCalculator(context);
         long dailyLimitMinutes = screenTimeRepo.getDailyLimit();
+        
+        // Enhanced debugging
+        Log.d("ScreenTimeManager", "=== SCREEN TIME CHECK START ===");
+        Log.d("ScreenTimeManager", "Daily limit from repository: " + dailyLimitMinutes + " minutes");
+        
+        // Also check SharedPreferences for comparison
+        SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", Context.MODE_PRIVATE);
+        long sharedPrefLimit = prefs.getLong("daily_limit_minutes", 120);
+        Log.d("ScreenTimeManager", "Daily limit from SharedPrefs: " + sharedPrefLimit + " minutes");
+        
+        // Get current usage
+        long currentUsage = calculator.getTodayUsageMinutes();
+        Log.d("ScreenTimeManager", "Current usage today: " + currentUsage + " minutes");
+        Log.d("ScreenTimeManager", "Limit exceeded check: " + currentUsage + " >= " + dailyLimitMinutes + " ? " + (currentUsage >= dailyLimitMinutes));
 
         if (calculator.isLimitExceeded(dailyLimitMinutes)) {
             // Prevent multiple simultaneous lock attempts
             if (!lockInProgress) {
                 lockInProgress = true;
-                Log.d("ScreenTimeManager", "Daily limit exceeded - triggering device lock");
+                Log.d("ScreenTimeManager", "🚨 Daily limit exceeded - triggering device lock (Usage: " + currentUsage + "min, Limit: " + dailyLimitMinutes + "min)");
                 
                 // Trigger device lock
                 Intent intent = new Intent(context, LockDeviceReceiver.class);
@@ -182,8 +200,9 @@ public class ScreenTimeManager {
             }
         } else {
             ScreenTimeCalculator.ScreenTimeData data = calculator.getScreenTimeData(dailyLimitMinutes);
-            Log.d("ScreenTimeManager", "Screen time check: " + data.toString());
+            Log.d("ScreenTimeManager", "✅ Screen time within limits: " + data.toString());
         }
+        Log.d("ScreenTimeManager", "=== SCREEN TIME CHECK END ===");
     }
 
 
