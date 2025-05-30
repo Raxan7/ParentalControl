@@ -10,10 +10,9 @@ import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.*;
-
 public class AuthService {
     public static final String BASE_URL = "http://192.168.1.147:8080/";
-//    public static final String BASE_URL = "https://parental-control-system.onrender.com/";
+    // public static final String BASE_URL = "https://parental-control-web.onrender.com/";
     public static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     public interface AuthCallback {
@@ -49,8 +48,8 @@ public class AuthService {
                     String accessToken = tokens.getString("access");
                     String refreshToken = tokens.getString("refresh");
 
-                    // Store the access token in AppController
-                    AppController.getInstance().setAuthToken(accessToken);
+                    // Store both tokens in AppController
+                    AppController.getInstance().setTokens(accessToken, refreshToken);
 
                     new Handler(Looper.getMainLooper()).post(() ->
                             callback.onSuccess(accessToken, refreshToken));
@@ -87,6 +86,9 @@ public class AuthService {
                 if (response.isSuccessful()) {
                     JSONObject tokens = new JSONObject(responseBody);
                     String accessToken = tokens.getString("access");
+                    
+                    // Update the access token in AppController
+                    AppController.getInstance().setAuthToken(accessToken);
 
                     new Handler(Looper.getMainLooper()).post(() ->
                             callback.onSuccess(accessToken, refreshToken));

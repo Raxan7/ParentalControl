@@ -19,9 +19,6 @@ import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
-import androidx.work.Data;
-import androidx.work.OneTimeWorkRequest;
-import androidx.work.WorkManager;
 
 /**
  * Background service that watches for web blocking updates
@@ -32,9 +29,9 @@ public class BlockingSyncService extends Service {
     private static final String CHANNEL_ID = "blocking_sync_channel";
     private static final int NOTIFICATION_ID = 3001;
     
-    // Different poll intervals based on battery level
-    private static final int POLL_INTERVAL_NORMAL = 5000;   // 5 seconds
-    private static final int POLL_INTERVAL_LOW_BATTERY = 15000;  // 15 seconds
+    // Different poll intervals based on battery level - Updated for 10 second interval
+    private static final int POLL_INTERVAL_NORMAL = 10000;   // 10 seconds (as requested)
+    private static final int POLL_INTERVAL_LOW_BATTERY = 20000;  // 20 seconds
     private static final int POLL_INTERVAL_CRITICAL = 30000; // 30 seconds
     
     private Handler handler;
@@ -151,16 +148,18 @@ public class BlockingSyncService extends Service {
     }
     
     private void checkForBlockingUpdates(String deviceId) {
-        // Trigger a one-time forced sync
-        Data inputData = new Data.Builder()
-                .putBoolean("force_sync", true)
-                .build();
+        // Direct sync instead of using WorkManager to achieve 10-second polling
+        Log.d(TAG, "Checking for blocking updates every 10 seconds...");
         
-        OneTimeWorkRequest blockingSyncRequest = new OneTimeWorkRequest.Builder(BlockedAppsSyncWorker.class)
-                .setInputData(inputData)
-                .build();
-        
-        WorkManager.getInstance(this).enqueue(blockingSyncRequest);
+        // Use the existing BlockedAppsManager to force immediate sync
+        // This will call the force_sync_blocked_apps endpoint and update local database
+        new Thread(() -> {
+            try {
+                BlockedAppsManager.forceImmediateSync(this, deviceId);
+            } catch (Exception e) {
+                Log.e(TAG, "Error during immediate sync in service", e);
+            }
+        }).start();
     }
     
     private void createNotificationChannel() {

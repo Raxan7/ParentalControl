@@ -7,12 +7,15 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Handler;
+import android.util.Log;
 import android.widget.Toast;
 
 public class LockDeviceReceiver extends BroadcastReceiver {
     private static final int LOCK_TIME = 15000; // 15 seconds
     @Override
     public void onReceive(Context context, Intent intent) {
+        Log.d("LockDeviceReceiver", "Screen time limit exceeded - executing device lock");
+        
         // Implement device locking logic here
         // For example:
         // 1. Show a lockdown screen

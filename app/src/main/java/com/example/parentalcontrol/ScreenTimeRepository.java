@@ -102,4 +102,48 @@ public class ScreenTimeRepository {
         db.close();
         return dailyLimit;
     }
+
+    /**
+     * Clears all app usage data for today
+     */
+    public void clearTodayUsageData() {
+        try {
+            long startOfDay = getStartOfDay();
+
+            // Clear app usage data from today
+            SQLiteDatabase db = dbHelper.getWritableDatabase();
+            int deletedRows = db.delete("app_usage",
+                    "start_time >= ?",
+                    new String[]{String.valueOf(startOfDay)});
+
+            Log.d("ScreenTimeRepository", "Cleared " + deletedRows + " app usage records from today");
+
+            // Also clear screen time minute data for today
+            String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                    .format(new Date());
+
+            int deletedScreenTime = db.delete("screen_time",
+                    "timestamp LIKE ?",
+                    new String[]{today + "%"});
+
+            Log.d("ScreenTimeRepository", "Cleared " + deletedScreenTime + " screen time records from today");
+
+            db.close();
+
+        } catch (Exception e) {
+            Log.e("ScreenTimeRepository", "Error clearing today's usage data", e);
+        }
+    }
+
+    /**
+     * Gets the start of today in milliseconds
+     */
+    private long getStartOfDay() {
+        Calendar calendar = Calendar.getInstance();
+        calendar.set(Calendar.HOUR_OF_DAY, 0);
+        calendar.set(Calendar.MINUTE, 0);
+        calendar.set(Calendar.SECOND, 0);
+        calendar.set(Calendar.MILLISECOND, 0);
+        return calendar.getTimeInMillis();
+    }
 }

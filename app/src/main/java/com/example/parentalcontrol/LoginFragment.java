@@ -25,7 +25,10 @@ public class LoginFragment extends Fragment {
             String pass = password.getText().toString();
 
             if (!user.isEmpty() && !pass.isEmpty()) {
-                ((MainActivity)requireActivity()).attemptLogin(user, pass);
+                MainActivity mainActivity = (MainActivity) getActivity();
+                if (mainActivity != null) {
+                    mainActivity.attemptLogin(user, pass);
+                }
             } else {
                 Toast.makeText(getContext(),
                         "Please enter username and password",

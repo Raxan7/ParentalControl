@@ -2,6 +2,7 @@ package com.example.parentalcontrol;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
@@ -189,7 +190,7 @@ public class AppBlockAccessibilityService extends AccessibilityService {
             final long USAGE_STATS_INTERVAL = 1000 * 60; // 1 minute
             
             android.app.usage.UsageStatsManager usageStatsManager = 
-                (android.app.usage.UsageStatsManager) getSystemService("usagestats");
+                (android.app.usage.UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
             long time = System.currentTimeMillis();
             
             android.app.usage.UsageEvents usageEvents = usageStatsManager.queryEvents(

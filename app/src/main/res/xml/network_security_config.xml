@@ -2,7 +2,7 @@
 <network-security-config>
     <!-- For development - allows cleartext traffic -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">parental-control-system.onrender.com</domain>
+        <domain includeSubdomains="true">parental-control-web.onrender.com</domain>
         <domain includeSubdomains="true">192.168.1.147</domain>
         <domain includeSubdomains="true">10.0.2.2</domain> <!-- For emulator -->
     </domain-config>

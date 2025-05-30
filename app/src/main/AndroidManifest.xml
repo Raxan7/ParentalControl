@@ -13,6 +13,7 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -107,6 +108,13 @@
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
+        <service
+            android:name=".ScreenTimeCountdownService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
@@ -117,6 +125,7 @@
             </intent-filter>
         </receiver>
         <receiver android:name=".LockDeviceReceiver" />
+        <receiver android:name=".ScreenTimeCheckReceiver" />
         <receiver android:name=".DeviceAdminReceiverCustom"
             android:exported="true"
             android:permission="android.permission.BIND_DEVICE_ADMIN">
