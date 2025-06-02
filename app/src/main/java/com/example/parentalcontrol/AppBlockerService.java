@@ -2,6 +2,10 @@ package com.example.parentalcontrol;
 
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.ContentValues;
 import android.content.Context;
@@ -10,10 +14,13 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.provider.Settings;
 import android.util.Log;
+
+import androidx.core.app.NotificationCompat;
 
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
@@ -31,6 +38,10 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 public class AppBlockerService extends Service {
+    private static final String TAG = "AppBlockerService";
+    private static final String CHANNEL_ID = "app_blocker_channel";
+    private static final int NOTIFICATION_ID = 4001;
+    
     private ActivityManager activityManager;
     private Handler handler;
     private List<String> blockedPackages = new ArrayList<>();
@@ -39,6 +50,12 @@ public class AppBlockerService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        Log.d(TAG, "AppBlockerService onCreate");
+        
+        // Start as foreground service to prevent killing
+        createNotificationChannel();
+        startForeground(NOTIFICATION_ID, createForegroundNotification());
+        
         EventBus.getDefault().register(this);
         activityManager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
         handler = new Handler();
@@ -52,7 +69,45 @@ public class AppBlockerService extends Service {
         startMonitoring();
         syncBlockedApps();
         
-        Log.d("AppBlocker", "Service created and registered with AppController");
+        Log.d(TAG, "AppBlockerService created and running as foreground service");
+    }
+    
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        Log.d(TAG, "AppBlockerService onStartCommand");
+        return START_STICKY; // Restart if killed
+    }
+    
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            String name = "App Blocker Service";
+            String description = "Monitors and blocks restricted apps";
+            int importance = NotificationManager.IMPORTANCE_LOW;
+            
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, name, importance);
+            channel.setDescription(description);
+            
+            NotificationManager notificationManager = getSystemService(NotificationManager.class);
+            if (notificationManager != null) {
+                notificationManager.createNotificationChannel(channel);
+            }
+        }
+    }
+    
+    private Notification createForegroundNotification() {
+        Intent notificationIntent = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                this, 0, notificationIntent, 
+                PendingIntent.FLAG_IMMUTABLE);
+        
+        return new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("App Blocker Active")
+                .setContentText("Monitoring and enforcing app restrictions")
+                .setSmallIcon(R.drawable.ic_block)
+                .setContentIntent(pendingIntent)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .build();
     }
 
     private void startMonitoring() {

@@ -77,16 +77,19 @@
             android:name=".ActivityTrackerService"
             android:enabled="true"
             android:exported="false"
+            android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
         <service
             android:name=".DataSyncService"
             android:enabled="true"
             android:exported="false"
+            android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
         <service
             android:name=".AppBlockerService"
             android:enabled="true"
             android:exported="false"
+            android:foregroundServiceType="systemExempted"
             android:stopWithTask="false" />
         
         <service
@@ -103,6 +106,13 @@
         
         <service
             android:name=".BlockingSyncService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
+        <service
+            android:name=".PeriodicHttpSyncService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync"

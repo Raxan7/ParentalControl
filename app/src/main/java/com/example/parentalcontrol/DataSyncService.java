@@ -34,7 +34,7 @@ public class DataSyncService extends Service {
     private static final int NOTIFICATION_ID = 2;
     private Handler syncHandler;
     private Runnable syncRunnable;
-    private static final long SYNC_INTERVAL = 5000; // 5 seconds for testing
+    private static final long SYNC_INTERVAL = 10000; // 10 seconds - consistent with BlockingSyncService
 
     @SuppressLint("ForegroundServiceType")
     @Override
@@ -57,7 +57,10 @@ public class DataSyncService extends Service {
 
     private void performSync() {
         String authToken = AppController.getInstance().getAuthToken();
+        Log.d("DataSyncService", "Attempting to perform sync. Auth token available: " + (authToken != null && !authToken.isEmpty()));
+        
         if (authToken != null && !authToken.isEmpty()) {
+            Log.d("DataSyncService", "Starting sync with auth token: " + authToken.substring(0, Math.min(10, authToken.length())) + "...");
             // Sync screen time rules first
             syncScreenTimeRules(authToken, new DataSync.SyncCallback() {
                 @Override
@@ -85,6 +88,27 @@ public class DataSyncService extends Service {
                     ErrorHandler.handleApiError(DataSyncService.this, e, "screen_time_rules_sync");
                 }
             });
+        } else {
+            Log.w("DataSyncService", "Cannot perform sync - no authentication token available. User needs to log in.");
+            
+            // Try to recover authentication if refresh token is available
+            String refreshToken = AppController.getInstance().getRefreshToken();
+            if (refreshToken != null && !refreshToken.isEmpty()) {
+                Log.d("DataSyncService", "Attempting to refresh authentication token");
+                AuthService.refreshToken(refreshToken, new AuthService.AuthCallback() {
+                    @Override
+                    public void onSuccess(String accessToken, String refreshToken) {
+                        Log.d("DataSyncService", "Authentication token refreshed successfully");
+                        // Retry sync after successful refresh
+                        performSync();
+                    }
+
+                    @Override
+                    public void onFailure(Exception e) {
+                        Log.e("DataSyncService", "Failed to refresh authentication token", e);
+                    }
+                });
+            }
         }
     }
 

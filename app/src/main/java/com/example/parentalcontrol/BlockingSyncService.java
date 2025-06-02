@@ -34,7 +34,11 @@ public class BlockingSyncService extends Service {
     private static final int POLL_INTERVAL_LOW_BATTERY = 20000;  // 20 seconds
     private static final int POLL_INTERVAL_CRITICAL = 30000; // 30 seconds
     
+    // Service watchdog intervals
+    private static final int WATCHDOG_INTERVAL = 60000; // 1 minute
+    
     private Handler handler;
+    private Handler watchdogHandler;
     private boolean isRunning = false;
     private int currentPollInterval = POLL_INTERVAL_NORMAL;
     private boolean isLowPowerMode = false;
@@ -66,6 +70,7 @@ public class BlockingSyncService extends Service {
         super.onCreate();
         Log.d(TAG, "BlockingSyncService created");
         handler = new Handler();
+        watchdogHandler = new Handler();
         
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, createForegroundNotification());
@@ -76,6 +81,9 @@ public class BlockingSyncService extends Service {
         filter.addAction(Intent.ACTION_BATTERY_LOW);
         filter.addAction(Intent.ACTION_BATTERY_OKAY);
         registerReceiver(batteryReceiver, filter);
+        
+        // Start service watchdog
+        startServiceWatchdog();
     }
     
     @Override
@@ -99,11 +107,44 @@ public class BlockingSyncService extends Service {
     
     @Override
     public void onDestroy() {
-        Log.d(TAG, "BlockingSyncService destroyed");
+        Log.d(TAG, "BlockingSyncService destroyed - attempting restart");
         isRunning = false;
         handler.removeCallbacksAndMessages(null);
+        watchdogHandler.removeCallbacksAndMessages(null);
         unregisterReceiver(batteryReceiver);
+        
+        // Restart service immediately
+        restartService();
+        
         super.onDestroy();
+    }
+    
+    private void restartService() {
+        Log.d(TAG, "Restarting BlockingSyncService");
+        Intent restartIntent = new Intent(this, BlockingSyncService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(restartIntent);
+        } else {
+            startService(restartIntent);
+        }
+    }
+    
+    private void startServiceWatchdog() {
+        Runnable watchdogTask = new Runnable() {
+            @Override
+            public void run() {
+                Log.d(TAG, "Service watchdog check - ensuring all services are running");
+                ensureAllServicesRunning();
+                watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
+            }
+        };
+        watchdogHandler.post(watchdogTask);
+    }
+    
+    private void ensureAllServicesRunning() {
+        Context context = getApplicationContext();
+        ServiceManager serviceManager = new ServiceManager(context);
+        serviceManager.ensureServicesRunning();
     }
     
     private void adjustPollingInterval(int batteryPercent) {

@@ -6,6 +6,12 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.util.Log;
 
+import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.PeriodicWorkRequest;
+import androidx.work.WorkManager;
+
+import java.util.concurrent.TimeUnit;
+
 import okhttp3.OkHttpClient;
 import okhttp3.logging.HttpLoggingInterceptor;
 
@@ -19,6 +25,8 @@ public class AppController extends Application {
     private String refreshToken;
     private static AppController instance;
     private AppBlockerService appBlockerService;
+    private ServiceWatchdog serviceWatchdog;
+    private ServiceManager serviceManager;
 
     @Override
     public void onCreate() {
@@ -38,6 +46,12 @@ public class AppController extends Application {
                 
         // Initialize blocking debugger for diagnostics
         initBlockingDebugger();
+        
+        // Initialize service management
+        initializeServiceManagement();
+        
+        // Log authentication status for debugging
+        logAuthenticationStatus();
         
         Log.d(TAG, "AppController initialized. Auth token present: " + (authToken != null && !authToken.isEmpty()));
     }
@@ -105,6 +119,55 @@ public class AppController extends Application {
             e.printStackTrace();
         }
     }
+    
+    /**
+     * Initialize service management components
+     */
+    private void initializeServiceManagement() {
+        try {
+            // Initialize ServiceManager
+            serviceManager = ServiceManager.getInstance(this);
+            
+            // Start essential services immediately
+            serviceManager.ensureServicesRunning();
+            
+            // Initialize and start ServiceWatchdog
+            serviceWatchdog = new ServiceWatchdog(this);
+            serviceWatchdog.startWatchdog();
+            
+            // Schedule periodic service watchdog worker as backup
+            schedulePeriodicServiceWatchdog();
+            
+            Log.d(TAG, "Service management initialized successfully");
+        } catch (Exception e) {
+            Log.e(TAG, "Error initializing service management", e);
+        }
+    }
+    
+    /**
+     * Schedule periodic service watchdog worker using WorkManager
+     */
+    private void schedulePeriodicServiceWatchdog() {
+        try {
+            // Create periodic work request - runs every 15 minutes (minimum allowed)
+            PeriodicWorkRequest periodicWorkRequest = new PeriodicWorkRequest.Builder(
+                    PeriodicServiceWatchdogWorker.class, 
+                    15, TimeUnit.MINUTES)
+                    .addTag("service_watchdog")
+                    .build();
+            
+            // Schedule the work, replacing any existing work with the same unique name
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                    "periodic_service_watchdog",
+                    ExistingPeriodicWorkPolicy.REPLACE,
+                    periodicWorkRequest
+            );
+            
+            Log.d(TAG, "Periodic service watchdog worker scheduled successfully");
+        } catch (Exception e) {
+            Log.e(TAG, "Error scheduling periodic service watchdog worker", e);
+        }
+    }
 
 //    private void startServices() {
 //
@@ -164,6 +227,28 @@ public class AppController extends Application {
         return authToken != null && !authToken.isEmpty();
     }
 
+    /**
+     * Log authentication status for debugging
+     */
+    private void logAuthenticationStatus() {
+        Log.d(TAG, "=== AUTHENTICATION STATUS ===");
+        Log.d(TAG, "Auth token present: " + (authToken != null && !authToken.isEmpty()));
+        Log.d(TAG, "Refresh token present: " + (refreshToken != null && !refreshToken.isEmpty()));
+        
+        if (authToken != null && !authToken.isEmpty()) {
+            Log.d(TAG, "Auth token length: " + authToken.length());
+            Log.d(TAG, "Auth token prefix: " + authToken.substring(0, Math.min(10, authToken.length())) + "...");
+        }
+        
+        if (!isAuthenticated()) {
+            Log.w(TAG, "❌ USER IS NOT AUTHENTICATED - Services will not make HTTP requests");
+            Log.w(TAG, "   To fix: User needs to log in through MainActivity");
+        } else {
+            Log.d(TAG, "✅ USER IS AUTHENTICATED - Services can make HTTP requests");
+        }
+        Log.d(TAG, "=============================");
+    }
+
     // Method to get the AppBlockerService instance
     public AppBlockerService getAppBlockerService() {
         return appBlockerService;
@@ -172,5 +257,70 @@ public class AppController extends Application {
     // Method to set the AppBlockerService instance
     public void setAppBlockerService(AppBlockerService service) {
         this.appBlockerService = service;
+    }
+    
+    /**
+     * Get the ServiceManager instance
+     */
+    public ServiceManager getServiceManager() {
+        return serviceManager;
+    }
+    
+    /**
+     * Get the ServiceWatchdog instance
+     */
+    public ServiceWatchdog getServiceWatchdog() {
+        return serviceWatchdog;
+    }
+    
+    /**
+     * Ensure all critical services are running
+     */
+    public void ensureServicesRunning() {
+        if (serviceManager != null) {
+            serviceManager.ensureServicesRunning();
+        }
+    }
+    
+    /**
+     * Check if services should attempt HTTP requests
+     * This provides a central place to check authentication status
+     */
+    public boolean canMakeHttpRequests() {
+        boolean canMake = isAuthenticated();
+        if (!canMake) {
+            Log.w(TAG, "HTTP requests blocked - user not authenticated");
+        }
+        return canMake;
+    }
+    
+    /**
+     * Get a detailed status message for debugging
+     */
+    public String getServiceRequestStatus() {
+        if (isAuthenticated()) {
+            return "✅ Ready to make HTTP requests";
+        } else if (refreshToken != null && !refreshToken.isEmpty()) {
+            return "⚠️  No auth token but refresh token available - need to refresh";
+        } else {
+            return "❌ No authentication - user needs to log in";
+        }
+    }
+
+    @Override
+    public void onTerminate() {
+        super.onTerminate();
+        // Stop watchdog when app terminates
+        if (serviceWatchdog != null) {
+            serviceWatchdog.stopWatchdog();
+        }
+        
+        // Cancel periodic service watchdog worker
+        try {
+            WorkManager.getInstance(this).cancelUniqueWork("periodic_service_watchdog");
+            Log.d(TAG, "Periodic service watchdog worker cancelled");
+        } catch (Exception e) {
+            Log.e(TAG, "Error cancelling periodic service watchdog worker", e);
+        }
     }
 }

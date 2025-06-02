@@ -9,8 +9,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.view.Menu;
 import android.view.MenuItem;
 
@@ -51,6 +53,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int USAGE_STATS_REQUEST = 1001;
     private static final int REQUEST_CODE_ENABLE_ADMIN = 1003; // Unique request code for device admin
     private static final int ACCESSIBILITY_REQUEST = 1004; // Request code for accessibility service
+    private static final int BATTERY_OPTIMIZATION_REQUEST = 1005; // Request code for battery optimization
 
     private AppUsageRepository repository;
     private ProgressDialog progressDialog;
@@ -102,6 +105,12 @@ public class MainActivity extends AppCompatActivity {
             return; // Wait for onActivityResult
         }
 
+        // Check battery optimization exemption
+        if (!checkBatteryOptimizationExemption()) {
+            requestBatteryOptimizationExemption();
+            return; // Wait for onActivityResult
+        }
+
         // Only proceed if we have all permissions
         initializeIfPermissionsGranted();
 
@@ -128,12 +137,29 @@ public class MainActivity extends AppCompatActivity {
             }
         } else if (requestCode == ACCESSIBILITY_REQUEST) {
             if (checkAccessibilityPermission()) {
+                // Continue with battery optimization check
+                if (!checkBatteryOptimizationExemption()) {
+                    requestBatteryOptimizationExemption();
+                    return;
+                }
                 initializeIfPermissionsGranted();
             } else {
                 Toast.makeText(this, "Accessibility permission is required for app blocking to work", Toast.LENGTH_LONG).show();
                 // Don't finish the app, but warn user that blocking might not work properly
+                // Continue with battery optimization check
+                if (!checkBatteryOptimizationExemption()) {
+                    requestBatteryOptimizationExemption();
+                    return;
+                }
                 initializeIfPermissionsGranted();
             }
+        } else if (requestCode == BATTERY_OPTIMIZATION_REQUEST) {
+            if (checkBatteryOptimizationExemption()) {
+                Toast.makeText(this, "Battery optimization disabled - app will run continuously", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Warning: Battery optimization is still enabled. App may be killed when inactive.", Toast.LENGTH_LONG).show();
+            }
+            initializeIfPermissionsGranted();
         } else if (requestCode == REQUEST_CODE_ENABLE_ADMIN) {
             if (resultCode == RESULT_OK) {
                 // Device admin enabled
@@ -280,21 +306,31 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startForegroundServices() {
-        Log.d("SERVICE", "Attempting to start services...");
+        Log.d("SERVICE", "Attempting to start services using enhanced service management...");
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(new Intent(this, ActivityTrackerService.class));
-                startForegroundService(new Intent(this, DataSyncService.class));
-                startForegroundService(new Intent(this, BlockingSyncService.class)); // Start blocking sync service
-                startForegroundService(new Intent(this, ScreenTimeCountdownService.class)); // Start countdown service
+            // Use the enhanced service management from AppController
+            AppController appController = AppController.getInstance();
+            if (appController != null) {
+                appController.ensureServicesRunning();
+                Log.d("SERVICE", "Services started successfully via enhanced management");
             } else {
-                startService(new Intent(this, ActivityTrackerService.class));
-                startService(new Intent(this, DataSyncService.class));
-                startService(new Intent(this, BlockingSyncService.class)); // Start blocking sync service
-                startService(new Intent(this, ScreenTimeCountdownService.class)); // Start countdown service
+                // Fallback to direct service start if AppController is not available
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(new Intent(this, ActivityTrackerService.class));
+                    startForegroundService(new Intent(this, DataSyncService.class));
+                    startForegroundService(new Intent(this, BlockingSyncService.class));
+                    startForegroundService(new Intent(this, AppBlockerService.class));
+                    startForegroundService(new Intent(this, ScreenTimeCountdownService.class));
+                } else {
+                    startService(new Intent(this, ActivityTrackerService.class));
+                    startService(new Intent(this, DataSyncService.class));
+                    startService(new Intent(this, BlockingSyncService.class));
+                    startService(new Intent(this, AppBlockerService.class));
+                    startService(new Intent(this, ScreenTimeCountdownService.class));
+                }
+                Log.d("SERVICE", "Services started successfully via fallback method");
             }
-            Log.d("SERVICE", "Services started successfully");
         } catch (Exception e) {
             Log.e("SERVICE", "Failed to start services", e);
         }
@@ -379,6 +415,39 @@ public class MainActivity extends AppCompatActivity {
             
             Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
             startActivityForResult(intent, ACCESSIBILITY_REQUEST);
+        }
+    }
+
+    /**
+     * Check if battery optimization is disabled for this app
+     */
+    private boolean checkBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+        }
+        return true; // No battery optimization on older versions
+    }
+
+    /**
+     * Request to disable battery optimization for this app
+     */
+    private void requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !checkBatteryOptimizationExemption()) {
+            Toast.makeText(this, 
+                "Please disable battery optimization for this app to ensure it remains active", 
+                Toast.LENGTH_LONG).show();
+            
+            try {
+                Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivityForResult(intent, BATTERY_OPTIMIZATION_REQUEST);
+            } catch (Exception e) {
+                Log.e("BATTERY_OPT", "Error requesting battery optimization exemption", e);
+                // Fallback to general battery optimization settings
+                Intent intent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                startActivityForResult(intent, BATTERY_OPTIMIZATION_REQUEST);
+            }
         }
     }
 

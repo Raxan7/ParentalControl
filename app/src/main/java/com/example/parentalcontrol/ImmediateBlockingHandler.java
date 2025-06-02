@@ -61,8 +61,25 @@ public class ImmediateBlockingHandler {
 
                 // Get auth token
                 String authToken = AppController.getInstance().getAuthToken();
+                Log.d(TAG, "Auth token available: " + (authToken != null && !authToken.isEmpty()));
+                
                 if (authToken == null || authToken.isEmpty()) {
-                    throw new IOException("No authentication token available");
+                    Log.w(TAG, "No authentication token available for immediate blocking check");
+                    
+                    // Try to recover authentication if refresh token is available
+                    String refreshToken = AppController.getInstance().getRefreshToken();
+                    if (refreshToken != null && !refreshToken.isEmpty()) {
+                        Log.d(TAG, "Attempting to refresh authentication token before blocking check");
+                        // This is a synchronous call in a background thread, so it's okay
+                        try {
+                            // We need to implement a synchronous version or use a different approach
+                            Log.w(TAG, "Refresh token available but automatic refresh not implemented for blocking service");
+                        } catch (Exception e) {
+                            Log.e(TAG, "Failed to refresh token", e);
+                        }
+                    }
+                    
+                    throw new IOException("No authentication token available - user needs to log in");
                 }
 
                 // Create client with appropriate timeouts
