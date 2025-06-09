@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Content Blocked - Parental Controls</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+            animation: slideIn 0.5s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .warning-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        h1 {
+            color: #e74c3c;
+            margin: 0 0 20px 0;
+            font-size: 32px;
+            font-weight: 600;
+        }
+        
+        .blocked-domain {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            background: #ecf0f1;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            word-break: break-all;
+        }
+        
+        .message {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #34495e;
+            line-height: 1.5;
+        }
+        
+        .reason {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 30px;
+            line-height: 1.4;
+        }
+        
+        .actions {
+            margin-bottom: 25px;
+        }
+        
+        .btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin: 0 8px;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+        }
+        
+        .btn-secondary {
+            background: #95a5a6;
+        }
+        
+        .btn-secondary:hover {
+            background: #7f8c8d;
+            box-shadow: 0 4px 12px rgba(149, 165, 166, 0.3);
+        }
+        
+        .info {
+            font-size: 12px;
+            color: #bdc3c7;
+            border-top: 1px solid #ecf0f1;
+            padding-top: 20px;
+            margin-top: 20px;
+        }
+        
+        .time-stamp {
+            font-size: 11px;
+            color: #bdc3c7;
+            margin-top: 10px;
+        }
+        
+        .category-badge {
+            display: inline-block;
+            background: #e74c3c;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            margin: 10px 0;
+        }
+        
+        @media (max-width: 480px) {
+            .container {
+                padding: 25px 20px;
+                margin: 10px;
+            }
+            h1 {
+                font-size: 24px;
+            }
+            .warning-icon {
+                font-size: 48px;
+            }
+            .btn {
+                padding: 10px 18px;
+                margin: 5px;
+                display: block;
+                width: calc(100% - 10px);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="warning-icon">🛡️</div>
+        <h1>Content Blocked</h1>
+        
+        <div class="blocked-domain">{{BLOCKED_DOMAIN}}</div>
+        
+        <div class="category-badge">Restricted Content</div>
+        
+        <div class="message">
+            This website has been blocked by your parental control settings.
+        </div>
+        
+        <div class="reason">
+            The content on this site may not be appropriate or safe. This block helps ensure a safer browsing experience.
+        </div>
+        
+        <div class="actions">
+            <button onclick="window.history.back()" class="btn">
+                ← Go Back
+            </button>
+            <button onclick="window.close()" class="btn btn-secondary">
+                Close Tab
+            </button>
+        </div>
+        
+        <div class="info">
+            <p>🔒 This block is enforced by parental control software</p>
+            <p>If you believe this website should be accessible, please speak with your parent or guardian.</p>
+            <div class="time-stamp" id="timestamp"></div>
+        </div>
+    </div>
+    
+    <script>
+        // Add current timestamp
+        document.getElementById('timestamp').textContent = 'Blocked at: ' + new Date().toLocaleString();
+        
+        // Add keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                window.history.back();
+            } else if (e.ctrlKey && e.key === 'w') {
+                window.close();
+            }
+        });
+        
+        // Auto-focus on back button for accessibility
+        window.onload = function() {
+            document.querySelector('.btn').focus();
+        };
+    </script>
+</body>
+</html>

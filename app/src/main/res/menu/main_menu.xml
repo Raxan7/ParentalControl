@@ -16,4 +16,9 @@
         android:title="Blocking Diagnostics"
         android:orderInCategory="100"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_vpn_test"
+        android:title="VPN Content Filter Test"
+        android:orderInCategory="110"
+        app:showAsAction="never" />
 </menu>

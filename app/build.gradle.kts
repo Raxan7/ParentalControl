@@ -47,4 +47,5 @@ dependencies {
     implementation(libs.eventbus)
     implementation(libs.work.runtime.v271)
     implementation(libs.logging.interceptor)
+    implementation(libs.nanohttpd)  // Local web server for blocking pages
 }

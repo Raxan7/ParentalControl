@@ -54,6 +54,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_CODE_ENABLE_ADMIN = 1003; // Unique request code for device admin
     private static final int ACCESSIBILITY_REQUEST = 1004; // Request code for accessibility service
     private static final int BATTERY_OPTIMIZATION_REQUEST = 1005; // Request code for battery optimization
+    private static final int OVERLAY_PERMISSION_REQUEST = 1006; // Request code for overlay permission
 
     private AppUsageRepository repository;
     private ProgressDialog progressDialog;
@@ -111,6 +112,12 @@ public class MainActivity extends AppCompatActivity {
             return; // Wait for onActivityResult
         }
 
+        // Check overlay permission (required for app blocking overlays)
+        if (!checkOverlayPermission()) {
+            requestOverlayPermission();
+            return; // Wait for onActivityResult
+        }
+
         // Only proceed if we have all permissions
         initializeIfPermissionsGranted();
 
@@ -158,6 +165,18 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Battery optimization disabled - app will run continuously", Toast.LENGTH_SHORT).show();
             } else {
                 Toast.makeText(this, "Warning: Battery optimization is still enabled. App may be killed when inactive.", Toast.LENGTH_LONG).show();
+            }
+            // Continue with overlay permission check
+            if (!checkOverlayPermission()) {
+                requestOverlayPermission();
+                return;
+            }
+            initializeIfPermissionsGranted();
+        } else if (requestCode == OVERLAY_PERMISSION_REQUEST) {
+            if (checkOverlayPermission()) {
+                Toast.makeText(this, "Overlay permission granted - app blocking will work properly", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Warning: Overlay permission denied. App blocking may not work properly.", Toast.LENGTH_LONG).show();
             }
             initializeIfPermissionsGranted();
         } else if (requestCode == REQUEST_CODE_ENABLE_ADMIN) {
@@ -451,6 +470,38 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Check if overlay permission is granted for this app
+     */
+    private boolean checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return Settings.canDrawOverlays(this);
+        }
+        return true; // No overlay permission needed on older versions
+    }
+
+    /**
+     * Request overlay permission for this app
+     */
+    private void requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !checkOverlayPermission()) {
+            Toast.makeText(this, 
+                "Please grant overlay permission for app blocking to work properly", 
+                Toast.LENGTH_LONG).show();
+            
+            try {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST);
+            } catch (Exception e) {
+                Log.e("OVERLAY_PERM", "Error requesting overlay permission", e);
+                // Fallback to general overlay settings
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
+                startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST);
+            }
+        }
+    }
+
     private void showLoginScreen() {
         // Create and show the login fragment
         LoginFragment loginFragment = new LoginFragment();
@@ -595,6 +646,11 @@ public class MainActivity extends AppCompatActivity {
         } else if (item.getItemId() == R.id.menu_diagnostics) {
             // Launch the BlockingTesterActivity
             Intent intent = new Intent(this, BlockingTesterActivity.class);
+            startActivity(intent);
+            return true;
+        } else if (item.getItemId() == R.id.menu_vpn_test) {
+            // Launch the ContentFilterTestActivity
+            Intent intent = new Intent(this, ContentFilterTestActivity.class);
             startActivity(intent);
             return true;
         } else if (item.getItemId() == R.id.menu_reset_screen_time) {
