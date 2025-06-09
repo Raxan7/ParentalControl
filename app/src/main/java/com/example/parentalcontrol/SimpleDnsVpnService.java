@@ -36,6 +36,12 @@ public class SimpleDnsVpnService extends VpnService {
     private boolean isRunning = false;
     private ContentFilterEngine filterEngine;
     private LocalWebServer localWebServer;
+    private VpnDiagnostics diagnostics;
+    
+    // Diagnostic control
+    private static final long DIAGNOSTIC_INTERVAL = 60000; // Run diagnostics every 60 seconds
+    private long lastDiagnosticRun = 0;
+    private int consecutiveFailures = 0;
     
     @Override
     public void onCreate() {
@@ -45,7 +51,14 @@ public class SimpleDnsVpnService extends VpnService {
         
         filterEngine = new ContentFilterEngine(this);
         localWebServer = new LocalWebServer(this);
+        diagnostics = new VpnDiagnostics(this);
         executorService = Executors.newFixedThreadPool(2);
+        
+        // Run initial diagnostics
+        runInitialDiagnostics();
+        
+        // Run focused issue identification
+        runIssueIdentification();
         
         // Start local web server for blocked content warnings
         startLocalWebServer();
@@ -79,7 +92,12 @@ public class SimpleDnsVpnService extends VpnService {
             Builder builder = new Builder();
             builder.setMtu(1500)
                    .addAddress("10.0.0.1", 24)
-                   .addRoute("0.0.0.0", 0)
+                   // CRITICAL FIX: Only route DNS traffic through VPN instead of all traffic
+                   // This resolves the connectivity issue where DNS works but websites don't load
+                   .addRoute("8.8.8.8", 32)      // Google DNS primary
+                   .addRoute("8.8.4.4", 32)      // Google DNS secondary  
+                   .addRoute("1.1.1.1", 32)      // Cloudflare DNS primary
+                   .addRoute("1.0.0.1", 32)      // Cloudflare DNS secondary
                    .addDnsServer("8.8.8.8")
                    .setSession("Parental Control DNS Filter");
             try {
@@ -119,21 +137,38 @@ public class SimpleDnsVpnService extends VpnService {
                         if (length > 0) {
                             packet.clear();
                             packet.limit(length);
+                            
+                            // AUDIT POINT 1: Validate packet reception
+                            VpnDebugAuditor.auditPacketReception(packet, length);
+                            
                             Log.v(TAG, "[startDnsServer] Packet received, length: " + length);
-                            if (isDnsPacket(packet)) {
+                            
+                            // AUDIT POINT 2: Validate DNS packet detection
+                            boolean isDns = VpnDebugAuditor.auditDnsPacketDetection(packet);
+                            
+                            if (isDns) {
                                 Log.d(TAG, "[startDnsServer] DNS packet detected");
                                 handleDnsQuery(packet, out);
                             } else {
-                                Log.v(TAG, "[startDnsServer] Non-DNS packet, forwarding");
-                                out.write(packet.array(), 0, length);
-                                out.flush();
+                                // With DNS-only routing, non-DNS packets shouldn't reach here
+                                // If they do, it indicates a configuration issue
+                                Log.w(TAG, "[startDnsServer] Unexpected non-DNS packet received (routing issue?)");
+                                // AUDIT POINT 6: Track non-DNS packet handling
+                                VpnDebugAuditor.auditNonDnsPacket(packet);
+                                // Don't forward - let it use normal routing
                             }
                             packet.clear();
                         }
+                        
+                        // Generate periodic audit reports and run diagnostics
+                        VpnDebugAuditor.generateAuditReport();
+                        runPeriodicDiagnostics();
+                        
                         Thread.sleep(1);
                     } catch (IOException e) {
                         if (isRunning) {
                             Log.e(TAG, "[startDnsServer] Error in DNS server loop", e);
+                            VpnDebugAuditor.detectCriticalIssues();
                         }
                         break;
                     } catch (InterruptedException e) {
@@ -176,30 +211,58 @@ public class SimpleDnsVpnService extends VpnService {
     private void handleDnsQuery(ByteBuffer packet, FileOutputStream out) {
         try {
             String domain = extractDomainFromDnsPacket(packet);
+            
+            // AUDIT POINT 3: Validate domain extraction
+            VpnDebugAuditor.auditDomainExtraction(packet, domain);
+            
             Log.d(TAG, "[handleDnsQuery] DNS query for: " + domain);
             if (domain != null) {
-                if (filterEngine.shouldBlockDomain(domain)) {
+                boolean shouldBlock = filterEngine.shouldBlockDomain(domain);
+                
+                if (shouldBlock) {
+                    // AUDIT POINT 4: Track filtering decision
+                    VpnDebugAuditor.auditFilteringDecision(domain, true, "Domain blocked by filter engine");
+                    
                     Log.i(TAG, "[handleDnsQuery] BLOCKING DNS query for: " + domain);
                     byte[] blockedResponse = createBlockedDnsResponse(packet);
+                    
+                    // AUDIT POINT 5: Validate blocked response
+                    VpnDebugAuditor.auditDnsResponse(domain, blockedResponse, true);
+                    
                     if (blockedResponse != null) {
                         out.write(blockedResponse);
                         out.flush();
                         showBlockedNotification(domain);
+                        trackSuccess("DNS block response for " + domain);
                         Log.d(TAG, "[handleDnsQuery] Blocked response sent for: " + domain);
                         return;
                     } else {
+                        trackFailure("Failed to create blocked DNS response for " + domain);
                         Log.e(TAG, "[handleDnsQuery] Failed to create blocked DNS response for: " + domain);
                     }
                 }
             }
             // Forward legitimate queries to real DNS server synchronously
+            // AUDIT POINT 4: Track filtering decision for allowed domains
+            VpnDebugAuditor.auditFilteringDecision(domain, false, "Domain allowed by filter engine");
+            
             Log.d(TAG, "[handleDnsQuery] Forwarding DNS query for: " + domain);
+            long startTime = System.currentTimeMillis();
             byte[] dnsResponse = forwardDnsQueryAndGetResponse(packet);
+            
+            // AUDIT POINT 7: Track performance
+            VpnDebugAuditor.auditDnsForwardingPerformance(domain, startTime, dnsResponse != null);
+            
+            // AUDIT POINT 5: Validate forwarded response
+            VpnDebugAuditor.auditDnsResponse(domain, dnsResponse, false);
+            
             if (dnsResponse != null) {
                 out.write(dnsResponse);
                 out.flush();
+                trackSuccess("DNS forward response for " + domain);
                 Log.d(TAG, "[handleDnsQuery] Forwarded DNS response sent for: " + domain);
             } else {
+                trackFailure("Failed to forward DNS query for " + domain);
                 Log.e(TAG, "[handleDnsQuery] Failed to forward DNS query for: " + domain);
             }
         } catch (Exception e) {
@@ -598,6 +661,96 @@ public class SimpleDnsVpnService extends VpnService {
             if (notificationManager != null) {
                 notificationManager.createNotificationChannel(channel);
             }
+        }
+    }
+    
+    /**
+     * Run initial diagnostics to identify potential issues before VPN starts
+     */
+    private void runInitialDiagnostics() {
+        executorService.submit(() -> {
+            try {
+                Log.i(TAG, "Running initial VPN diagnostics...");
+                diagnostics.runCompleteDiagnostics();
+                Log.i(TAG, "Initial diagnostics completed");
+            } catch (Exception e) {
+                Log.e(TAG, "Initial diagnostics failed", e);
+            }
+        });
+    }
+    
+    /**
+     * Run focused issue identification to determine root cause
+     */
+    private void runIssueIdentification() {
+        executorService.submit(() -> {
+            try {
+                Log.i(TAG, "Running focused issue identification...");
+                VpnIssueIdentifier.identifyRootCause();
+                VpnIssueIdentifier.provideRecommendations();
+                VpnIssueIdentifier.showCodeChanges();
+                Log.i(TAG, "Issue identification completed");
+            } catch (Exception e) {
+                Log.e(TAG, "Issue identification failed", e);
+            }
+        });
+    }
+    
+    /**
+     * Run periodic diagnostics to monitor VPN health
+     */
+    private void runPeriodicDiagnostics() {
+        long currentTime = System.currentTimeMillis();
+        
+        if (currentTime - lastDiagnosticRun > DIAGNOSTIC_INTERVAL) {
+            lastDiagnosticRun = currentTime;
+            
+            executorService.submit(() -> {
+                try {
+                    Log.i(TAG, "Running periodic VPN diagnostics...");
+                    
+                    // Run focused diagnostics based on current issues
+                    if (consecutiveFailures > 3) {
+                        Log.w(TAG, "Multiple consecutive failures detected, running comprehensive diagnostics");
+                        diagnostics.runCompleteDiagnostics();
+                        diagnostics.testSpecificIssueScenarios();
+                        VpnDebugAuditor.detectCriticalIssues();
+                    } else {
+                        // Quick health check
+                        diagnostics.testExternalDnsResolution();
+                        diagnostics.testFilterEngine();
+                    }
+                    
+                } catch (Exception e) {
+                    Log.e(TAG, "Periodic diagnostics failed", e);
+                }
+            });
+        }
+    }
+    
+    /**
+     * Track failures and trigger enhanced diagnostics when needed
+     */
+    private void trackFailure(String context) {
+        consecutiveFailures++;
+        Log.w(TAG, "Failure tracked: " + context + " (consecutive failures: " + consecutiveFailures + ")");
+        
+        if (consecutiveFailures >= 5) {
+            Log.e(TAG, "CRITICAL: Too many consecutive failures, running emergency diagnostics");
+            executorService.submit(() -> {
+                diagnostics.testSpecificIssueScenarios();
+                VpnDebugAuditor.detectCriticalIssues();
+            });
+        }
+    }
+    
+    /**
+     * Reset failure counter on successful operations
+     */
+    private void trackSuccess(String context) {
+        if (consecutiveFailures > 0) {
+            Log.i(TAG, "Success after " + consecutiveFailures + " failures: " + context);
+            consecutiveFailures = 0;
         }
     }
 }

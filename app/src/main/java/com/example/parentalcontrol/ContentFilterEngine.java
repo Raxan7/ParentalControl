@@ -6,7 +6,9 @@ import android.util.Log;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -46,8 +48,8 @@ public class ContentFilterEngine {
         "tumblr.com", "deviantart.com", "flickr.com"
     };
     
-    // Social media domains (configurable blocking)
-    private static final String[] SOCIAL_MEDIA_DOMAINS = {
+    // Social media PRIMARY domains (main sites that should be blocked)
+    private static final String[] SOCIAL_MEDIA_PRIMARY_DOMAINS = {
         "facebook.com", "www.facebook.com", "m.facebook.com",
         "instagram.com", "www.instagram.com", "m.instagram.com",
         "twitter.com", "www.twitter.com", "m.twitter.com", "x.com",
@@ -60,6 +62,46 @@ public class ContentFilterEngine {
         "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be",
         "twitch.tv", "www.twitch.tv", "m.twitch.tv",
         "telegram.org", "web.telegram.org", "t.me"
+    };
+    
+    // Social media DEPENDENCY domains (APIs, CDNs, embeds - should be allowed as dependencies)
+    private static final String[] SOCIAL_MEDIA_DEPENDENCY_DOMAINS = {
+        // Facebook/Meta dependencies
+        "graph.facebook.com", "connect.facebook.net", "fbcdn.net", "static.xx.fbcdn.net",
+        "z-m-scontent.xx.fbcdn.net", "scontent.xx.fbcdn.net", "platform.instagram.com",
+        
+        // Twitter/X dependencies  
+        "abs.twimg.com", "pbs.twimg.com", "ton.twimg.com", "platform.twitter.com",
+        "cdn.syndication.twimg.com", "widgets.twimg.com",
+        
+        // YouTube dependencies (but not main site)
+        "ytimg.com", "i.ytimg.com", "s.ytimg.com", "youtube-nocookie.com",
+        "googlevideo.com", "ytimg.l.google.com",
+        
+        // LinkedIn dependencies
+        "platform.linkedin.com", "licdn.com", "linkedin.sc.omtrdc.net",
+        
+        // Pinterest dependencies
+        "pinimg.com", "widgets.pinterest.com",
+        
+        // TikTok dependencies
+        "byteoversea.com", "musical.ly", "tiktokcdn.com",
+        
+        // Reddit dependencies
+        "redditmedia.com", "redditstatic.com", "redd.it",
+        
+        // Discord dependencies
+        "discordapp.net", "discord.gg", "cdn.discordapp.com"
+    };
+    
+    // Context tracking for smart blocking
+    private final Set<String> recentlyAccessedDomains = new HashSet<>();
+    private final Map<String, Long> domainAccessTime = new HashMap<>();
+    private static final long CONTEXT_WINDOW_MS = 10000; // 10 seconds
+    
+    // Social media domains (configurable blocking) - DEPRECATED, replaced by PRIMARY/DEPENDENCY approach
+    private static final String[] SOCIAL_MEDIA_DOMAINS = {
+        // This is now managed by SOCIAL_MEDIA_PRIMARY_DOMAINS and SOCIAL_MEDIA_DEPENDENCY_DOMAINS
     };
     
     // Gaming and entertainment (optional blocking)
@@ -79,6 +121,42 @@ public class ContentFilterEngine {
         "amateur", "hardcore", "softcore", "bikini", "lingerie"
     };
     
+    // Exhaustive whitelist for essential domains and subdomains required for general web/app functionality
+    private static final String[] WHITELISTED_SUBDOMAINS = {
+        // Google core and static resources
+        "google.com", "www.google.com", "gstatic.com", "fonts.googleapis.com", "fonts.gstatic.com", "ssl.gstatic.com", "apis.google.com", "accounts.google.com", "clients1.google.com", "clients2.google.com", "clients3.google.com", "clients4.google.com", "clients5.google.com", "clients6.google.com", "lh3.googleusercontent.com", "lh4.googleusercontent.com", "lh5.googleusercontent.com", "lh6.googleusercontent.com", "googleusercontent.com",
+        // Cloudflare and CDN
+        "cloudflare.com", "www.cloudflare.com", "cdnjs.cloudflare.com", "cdn.jsdelivr.net", "jsdelivr.net", "cdn.cloudflare.net", "cdn.openai.com",
+        // OpenAI/ChatGPT
+        "openai.com", "chatgpt.com", "cdn.openai.com", "auth0.openai.com", "platform.openai.com",
+        // Microsoft
+        "microsoft.com", "www.microsoft.com", "login.microsoftonline.com", "live.com", "outlook.com", "office.com", "msn.com",
+        // Facebook essential services (not main site)
+        "graph.facebook.com", "z-m-gateway.facebook.com", "fbcdn.net", "static.xx.fbcdn.net",
+        // Twitter/X
+        "twitter.com", "abs.twimg.com", "pbs.twimg.com", "ton.twimg.com", "x.com",
+        // Apple
+        "apple.com", "www.apple.com", "icloud.com", "idmsa.apple.com",
+        // Amazon
+        "amazon.com", "www.amazon.com", "images-amazon.com", "ssl-images-amazon.com",
+        // Github
+        "github.com", "api.github.com", "raw.githubusercontent.com", "githubusercontent.com",
+        // YouTube essential (not main site)
+        "ytimg.com", "i.ytimg.com", "s.ytimg.com", "youtube-nocookie.com",
+        // Firebase
+        "firebaseio.com", "firebaseapp.com",
+        // Akamai
+        "akamaized.net", "akamaitechnologies.com",
+        // Stripe/Payments
+        "stripe.com", "js.stripe.com",
+        // Miscellaneous essential
+        "mozilla.org", "wikipedia.org", "wikimedia.org", "cdn.jsdelivr.net", "cdnjs.com", "bootstrapcdn.com", "jquery.com", "unpkg.com", "gravatar.com", "adobe.com", "cdn.segment.com", "cdn.optimizely.com", "cdn.sift.com", "cdn.ampproject.org", "cdn.shopify.com", "cdn.shopifycdn.net", "cdn.shopify.com",
+        // DNS/Network
+        "dns.google", "resolver1.opendns.com", "resolver2.opendns.com", "opendns.com", "cloudflare-dns.com",
+        // Add more as needed for your environment
+    };
+    private final Set<String> whitelistedDomains = new HashSet<>(Arrays.asList(WHITELISTED_SUBDOMAINS));
+    
     public ContentFilterEngine(Context context) {
         this.context = context;
         this.prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
@@ -96,11 +174,8 @@ public class ContentFilterEngine {
             blockedKeywords.addAll(Arrays.asList(ADULT_KEYWORDS));
         }
         
-        // Social media blocking is configurable
-        boolean blockSocialMedia = prefs.getBoolean(KEY_BLOCK_SOCIAL_MEDIA, true);
-        if (blockSocialMedia) {
-            blockedDomains.addAll(Arrays.asList(SOCIAL_MEDIA_DOMAINS));
-        }
+        // NOTE: Social media blocking is now handled by smart blocking logic in isDomainBlocked()
+        // We no longer add SOCIAL_MEDIA_PRIMARY_DOMAINS to blockedDomains directly
         
         // Gaming blocking is optional (default off)
         boolean blockGaming = prefs.getBoolean(KEY_BLOCK_GAMING, false);
@@ -110,8 +185,9 @@ public class ContentFilterEngine {
         
         Log.d(TAG, "Initialized content filter with " + blockedDomains.size() + 
               " blocked domains and " + blockedKeywords.size() + " blocked keywords");
-        Log.d(TAG, "Config - Adult: " + blockAdultContent + ", Social: " + blockSocialMedia + 
-              ", Gaming: " + blockGaming);
+        Log.d(TAG, "Config - Adult: " + blockAdultContent + 
+              ", Social: " + prefs.getBoolean(KEY_BLOCK_SOCIAL_MEDIA, true) + 
+              " (smart blocking), Gaming: " + blockGaming);
     }
     
     /**
@@ -368,12 +444,30 @@ public class ContentFilterEngine {
         }
         
         String normalizedDomain = domain.toLowerCase().trim();
+        String checkDomain = normalizedDomain.startsWith("www.") ? normalizedDomain.substring(4) : normalizedDomain;
         
-        // Remove www. prefix if present for checking
-        String checkDomain = normalizedDomain.startsWith("www.") ? 
-                            normalizedDomain.substring(4) : normalizedDomain;
+        // Update domain access tracking for context analysis
+        updateDomainAccessTracking(normalizedDomain);
         
-        // Check exact match
+        // Whitelist check: allow if in whitelist
+        if (whitelistedDomains.contains(checkDomain) || whitelistedDomains.contains(normalizedDomain)) {
+            Log.d(TAG, "Whitelisted domain: " + domain);
+            return false;
+        }
+        
+        // Smart social media blocking: check if this is a dependency access
+        if (isSocialMediaDependency(normalizedDomain) && isAccessedAsContext(normalizedDomain)) {
+            Log.d(TAG, "Allowing social media dependency in context: " + domain);
+            return false;
+        }
+        
+        // Check if it's a primary social media domain that should be blocked
+        if (prefs.getBoolean(KEY_BLOCK_SOCIAL_MEDIA, true) && isSocialMediaPrimary(normalizedDomain)) {
+            Log.d(TAG, "Blocking primary social media domain: " + domain);
+            return true;
+        }
+        
+        // Check exact match against blocked domains (adult content, gaming, etc.)
         if (blockedDomains.contains(checkDomain) || blockedDomains.contains(normalizedDomain)) {
             Log.d(TAG, "Blocking domain (exact match): " + domain);
             return true;
@@ -448,5 +542,141 @@ public class ContentFilterEngine {
      */
     public Set<String> getBlockedDomains() {
         return new HashSet<>(blockedDomains);
+    }
+    
+    /**
+     * Helper methods for smart social media blocking
+     */
+    
+    private void updateDomainAccessTracking(String domain) {
+        long currentTime = System.currentTimeMillis();
+        
+        // Clean up old entries outside the context window
+        cleanupOldDomainAccess(currentTime);
+        
+        // Record this domain access
+        domainAccessTime.put(domain, currentTime);
+        recentlyAccessedDomains.add(domain);
+        
+        Log.v(TAG, "Tracking domain access: " + domain + " at " + currentTime);
+    }
+    
+    private void cleanupOldDomainAccess(long currentTime) {
+        // Remove entries older than the context window
+        recentlyAccessedDomains.removeIf(domain -> {
+            Long accessTime = domainAccessTime.get(domain);
+            if (accessTime == null || (currentTime - accessTime) > CONTEXT_WINDOW_MS) {
+                domainAccessTime.remove(domain);
+                return true;
+            }
+            return false;
+        });
+    }
+    
+    private boolean isSocialMediaPrimary(String domain) {
+        for (String primaryDomain : SOCIAL_MEDIA_PRIMARY_DOMAINS) {
+            if (domain.equals(primaryDomain) || domain.endsWith("." + primaryDomain)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    private boolean isSocialMediaDependency(String domain) {
+        for (String dependencyDomain : SOCIAL_MEDIA_DEPENDENCY_DOMAINS) {
+            if (domain.equals(dependencyDomain) || domain.endsWith("." + dependencyDomain)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    private boolean isAccessedAsContext(String domain) {
+        // Check if there are recent non-social-media domains accessed
+        // This suggests the social media dependency is being used by another site
+        
+        long currentTime = System.currentTimeMillis();
+        boolean hasRecentNonSocialAccess = false;
+        
+        for (String recentDomain : recentlyAccessedDomains) {
+            Long accessTime = domainAccessTime.get(recentDomain);
+            if (accessTime != null && (currentTime - accessTime) <= CONTEXT_WINDOW_MS) {
+                // Check if this recent domain is NOT a social media primary domain
+                if (!isSocialMediaPrimary(recentDomain) && !isSocialMediaDependency(recentDomain)) {
+                    hasRecentNonSocialAccess = true;
+                    Log.v(TAG, "Found recent non-social domain: " + recentDomain + 
+                          " (accessed " + (currentTime - accessTime) + "ms ago)");
+                    break;
+                }
+            }
+        }
+        
+        if (hasRecentNonSocialAccess) {
+            Log.d(TAG, "Social media dependency " + domain + " accessed in context of other sites");
+            return true;
+        } else {
+            Log.d(TAG, "Social media dependency " + domain + " accessed without context (blocking)");
+            return false;
+        }
+    }
+    
+    /**
+     * Debug and monitoring methods for smart social media blocking
+     */
+    
+    public void logCurrentContext() {
+        long currentTime = System.currentTimeMillis();
+        cleanupOldDomainAccess(currentTime);
+        
+        Log.d(TAG, "=== Current Domain Context ===");
+        Log.d(TAG, "Recently accessed domains (" + recentlyAccessedDomains.size() + "):");
+        
+        for (String domain : recentlyAccessedDomains) {
+            Long accessTime = domainAccessTime.get(domain);
+            if (accessTime != null) {
+                long ageMs = currentTime - accessTime;
+                String type = isSocialMediaPrimary(domain) ? "PRIMARY" : 
+                            isSocialMediaDependency(domain) ? "DEPENDENCY" : "OTHER";
+                Log.d(TAG, "  " + domain + " (" + type + ") - " + ageMs + "ms ago");
+            }
+        }
+        Log.d(TAG, "==============================");
+    }
+    
+    public boolean testSmartBlocking(String domain) {
+        Log.d(TAG, "=== Testing Smart Blocking for: " + domain + " ===");
+        
+        boolean isPrimary = isSocialMediaPrimary(domain);
+        boolean isDependency = isSocialMediaDependency(domain);
+        boolean hasContext = isAccessedAsContext(domain);
+        boolean socialMediaEnabled = prefs.getBoolean(KEY_BLOCK_SOCIAL_MEDIA, true);
+        boolean wouldBlock = isDomainBlocked(domain);
+        
+        Log.d(TAG, "Domain: " + domain);
+        Log.d(TAG, "Is Primary Social Media: " + isPrimary);
+        Log.d(TAG, "Is Dependency: " + isDependency);
+        Log.d(TAG, "Has Context: " + hasContext);
+        Log.d(TAG, "Social Media Blocking Enabled: " + socialMediaEnabled);
+        Log.d(TAG, "Final Decision: " + (wouldBlock ? "BLOCK" : "ALLOW"));
+        Log.d(TAG, "================================================");
+        
+        return wouldBlock;
+    }
+    
+    /**
+     * Force add a domain to recent context (useful for testing)
+     */
+    public void addToRecentContext(String domain) {
+        updateDomainAccessTracking(domain.toLowerCase());
+        Log.d(TAG, "Added " + domain + " to recent context for testing");
+    }
+    
+    /**
+     * Clear domain access history (useful for testing)
+     */
+    public void clearDomainContext() {
+        recentlyAccessedDomains.clear();
+        domainAccessTime.clear();
+        Log.d(TAG, "Cleared domain access context");
     }
 }
