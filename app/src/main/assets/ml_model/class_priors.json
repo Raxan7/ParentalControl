@@ -1,0 +1,17 @@
+{
+  "Adult": -2.3026,
+  "Arts": -2.7081,
+  "Business": -2.9957,
+  "Computers": -2.7081,
+  "Games": -2.9957,
+  "Health": -2.7081,
+  "Home": -2.9957,
+  "Kids": -3.2958,
+  "News": -2.7081,
+  "Recreation": -2.9957,
+  "Reference": -3.2958,
+  "Science": -3.2958,
+  "Shopping": -2.9957,
+  "Society": -2.9957,
+  "Sports": -2.9957
+}

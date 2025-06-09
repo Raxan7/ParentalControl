@@ -13,6 +13,7 @@ import java.util.Set;
 
 /**
  * Engine that analyzes network packets to detect and block inappropriate content
+ * Integrates machine learning-based adult content detection with traditional blocking
  */
 public class ContentFilterEngine {
     private static final String TAG = "ContentFilterEngine";
@@ -27,6 +28,9 @@ public class ContentFilterEngine {
     private final SharedPreferences prefs;
     private final Set<String> blockedDomains;
     private final Set<String> blockedKeywords;
+    
+    // Machine Learning classifier for adult content detection
+    private final MLUrlClassifier mlClassifier;
     
     // Adult content domains
     private static final String[] ADULT_DOMAINS = {
@@ -163,15 +167,23 @@ public class ContentFilterEngine {
         this.blockedDomains = new HashSet<>();
         this.blockedKeywords = new HashSet<>();
         
+        // Initialize ML classifier for adult content detection
+        this.mlClassifier = new MLUrlClassifier(context);
+        
         initializeBlockLists();
+        
+        Log.i(TAG, "ContentFilterEngine initialized with ML-based adult content detection");
+        Log.d(TAG, mlClassifier.getModelStats());
     }
     
     private void initializeBlockLists() {
-        // Always block adult content by default
+        // Adult content is now handled by ML classifier - no need to add hardcoded domains
+        // Just keep keywords as fallback for keyword-based detection
         boolean blockAdultContent = prefs.getBoolean(KEY_BLOCK_ADULT_CONTENT, true);
         if (blockAdultContent) {
-            blockedDomains.addAll(Arrays.asList(ADULT_DOMAINS));
+            // Only add adult keywords as fallback (ML handles domain classification)
             blockedKeywords.addAll(Arrays.asList(ADULT_KEYWORDS));
+            Log.d(TAG, "Adult content blocking enabled - using ML classifier + keyword fallback");
         }
         
         // NOTE: Social media blocking is now handled by smart blocking logic in isDomainBlocked()
@@ -185,7 +197,7 @@ public class ContentFilterEngine {
         
         Log.d(TAG, "Initialized content filter with " + blockedDomains.size() + 
               " blocked domains and " + blockedKeywords.size() + " blocked keywords");
-        Log.d(TAG, "Config - Adult: " + blockAdultContent + 
+        Log.d(TAG, "Config - Adult: " + blockAdultContent + " (ML-based)" + 
               ", Social: " + prefs.getBoolean(KEY_BLOCK_SOCIAL_MEDIA, true) + 
               " (smart blocking), Gaming: " + blockGaming);
     }
@@ -461,19 +473,29 @@ public class ContentFilterEngine {
             return false;
         }
         
-        // Check if it's a primary social media domain that should be blocked
+        // Check if it's a primary social media domain that should be blocked (keep hardcoded as requested)
         if (prefs.getBoolean(KEY_BLOCK_SOCIAL_MEDIA, true) && isSocialMediaPrimary(normalizedDomain)) {
             Log.d(TAG, "Blocking primary social media domain: " + domain);
             return true;
         }
         
-        // Check exact match against blocked domains (adult content, gaming, etc.)
+        // 🤖 ML-BASED ADULT CONTENT DETECTION (replaces hardcoded adult domains)
+        if (prefs.getBoolean(KEY_BLOCK_ADULT_CONTENT, true)) {
+            if (mlClassifier.isAdultContent(domain)) {
+                double confidence = mlClassifier.getAdultContentConfidence(domain);
+                Log.d(TAG, "ML blocked adult content: " + domain + " (confidence: " + 
+                      String.format("%.4f", confidence) + ")");
+                return true;
+            }
+        }
+        
+        // Check exact match against blocked domains (gaming, etc. - NOT adult content anymore)
         if (blockedDomains.contains(checkDomain) || blockedDomains.contains(normalizedDomain)) {
             Log.d(TAG, "Blocking domain (exact match): " + domain);
             return true;
         }
         
-        // Check subdomains
+        // Check subdomains (gaming, etc. - NOT adult content anymore)
         for (String blockedDomain : blockedDomains) {
             if (checkDomain.endsWith("." + blockedDomain) || 
                 checkDomain.equals(blockedDomain) ||
@@ -483,7 +505,7 @@ public class ContentFilterEngine {
             }
         }
         
-        // Check if domain contains blocked keywords
+        // Check if domain contains blocked keywords (fallback - adult content now handled by ML)
         for (String keyword : blockedKeywords) {
             if (normalizedDomain.contains(keyword)) {
                 Log.d(TAG, "Blocking domain (keyword match): " + domain + " contains " + keyword);
@@ -678,5 +700,82 @@ public class ContentFilterEngine {
         recentlyAccessedDomains.clear();
         domainAccessTime.clear();
         Log.d(TAG, "Cleared domain access context");
+    }
+    
+    /**
+     * ML-specific testing and debugging methods
+     */
+    
+    /**
+     * Test ML classification for a URL
+     */
+    public boolean testMLClassification(String url) {
+        Log.d(TAG, "=== Testing ML Classification for: " + url + " ===");
+        
+        boolean isAdult = mlClassifier.isAdultContent(url);
+        double confidence = mlClassifier.getAdultContentConfidence(url);
+        boolean isModelReady = mlClassifier.isModelReady();
+        
+        Log.d(TAG, "URL: " + url);
+        Log.d(TAG, "ML Model Ready: " + isModelReady);
+        Log.d(TAG, "Is Adult Content: " + isAdult);
+        Log.d(TAG, "Confidence: " + String.format("%.4f", confidence));
+        Log.d(TAG, "Adult Blocking Enabled: " + prefs.getBoolean(KEY_BLOCK_ADULT_CONTENT, true));
+        Log.d(TAG, "Final Decision: " + (isAdult ? "BLOCK" : "ALLOW"));
+        Log.d(TAG, "==============================================");
+        
+        return isAdult;
+    }
+    
+    /**
+     * Get ML classifier statistics
+     */
+    public String getMLStats() {
+        return mlClassifier.getModelStats();
+    }
+    
+    /**
+     * Test a batch of URLs with ML classification
+     */
+    public void testMLBatch(String[] testUrls) {
+        Log.d(TAG, "=== ML Batch Testing ===");
+        Log.d(TAG, "Model Status: " + getMLStats());
+        
+        for (String url : testUrls) {
+            boolean wouldBlock = shouldBlockDomain(url);
+            boolean mlResult = mlClassifier.isAdultContent(url);
+            double confidence = mlClassifier.getAdultContentConfidence(url);
+            
+            String decision = wouldBlock ? "🚫 BLOCK" : "✅ ALLOW";
+            String mlDecision = mlResult ? "ADULT" : "SAFE";
+            
+            Log.d(TAG, String.format("%-30s | %s | ML: %s (%.3f)", 
+                  url, decision, mlDecision, confidence));
+        }
+        
+        Log.d(TAG, "========================");
+    }
+    
+    /**
+     * Get comprehensive blocking statistics
+     */
+    public String getBlockingStats() {
+        return String.format(
+            "ContentFilterEngine Stats:\n" +
+            "- ML Model: %s\n" +
+            "- Blocked Domains: %d\n" +
+            "- Blocked Keywords: %d\n" +
+            "- Adult Blocking: %s\n" +
+            "- Social Media Blocking: %s\n" +
+            "- Gaming Blocking: %s\n" +
+            "- Whitelisted Domains: %d",
+            mlClassifier.isModelReady() ? "Ready" : "Fallback",
+            blockedDomains.size(),
+            blockedKeywords.size(),
+            prefs.getBoolean(KEY_BLOCK_ADULT_CONTENT, true) ? "ML-based" : "Disabled",
+            prefs.getBoolean(KEY_BLOCK_SOCIAL_MEDIA, true) ? "Smart" : "Disabled",
+            prefs.getBoolean(KEY_BLOCK_GAMING, false) ? "Enabled" : "Disabled",
+            whitelistedDomains.size()
+        );
     }
 }
