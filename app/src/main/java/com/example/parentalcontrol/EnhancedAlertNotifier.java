@@ -28,12 +28,14 @@ public class EnhancedAlertNotifier {
     private static final String CHANNEL_SCREEN_TIME_CRITICAL = "SCREEN_TIME_CRITICAL";
     private static final String CHANNEL_BEDTIME_WARNING = "BEDTIME_WARNING";
     private static final String CHANNEL_BEDTIME_CRITICAL = "BEDTIME_CRITICAL";
+    private static final String CHANNEL_RULE_UPDATE = "RULE_UPDATE";
     
     // Notification IDs
     private static final int NOTIFICATION_SCREEN_TIME_WARNING = 5001;
     private static final int NOTIFICATION_SCREEN_TIME_CRITICAL = 5002;
     private static final int NOTIFICATION_BEDTIME_WARNING = 5003;
     private static final int NOTIFICATION_BEDTIME_CRITICAL = 5004;
+    private static final int NOTIFICATION_RULE_UPDATE = 5005;
     
     // Spam prevention
     private static final String PREFS_NAME = "notification_prefs";
@@ -71,6 +73,11 @@ public class EnhancedAlertNotifier {
             createNotificationChannel(manager, CHANNEL_BEDTIME_CRITICAL, 
                 "Bedtime Critical", "Critical bedtime notifications", 
                 NotificationManager.IMPORTANCE_HIGH);
+                
+            // Rule update notification channel
+            createNotificationChannel(manager, CHANNEL_RULE_UPDATE, 
+                "Rule Updates", "Screen time rule update notifications", 
+                NotificationManager.IMPORTANCE_DEFAULT);
         }
     }
     
@@ -263,5 +270,70 @@ public class EnhancedAlertNotifier {
         manager.cancel(NOTIFICATION_BEDTIME_WARNING);
         manager.cancel(NOTIFICATION_BEDTIME_CRITICAL);
         Log.d(TAG, "Cleared all bedtime notifications");
+    }
+    
+    /**
+     * Show rule update notification when screen time rules are changed from web interface
+     */
+    public static void showRuleUpdateNotification(Context context, long newLimitMinutes) {
+        String notificationKey = "rule_update";
+        
+        // Check spam prevention (allow one notification every 5 minutes for rule updates)
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        long lastNotificationTime = prefs.getLong("last_" + notificationKey, 0);
+        long currentTime = System.currentTimeMillis();
+        
+        if ((currentTime - lastNotificationTime) < 300000) { // 5 minute cooldown for rule updates
+            Log.d(TAG, "Rule update notification skipped due to cooldown");
+            return;
+        }
+        
+        try {
+            NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            
+            // Format the time limit for display
+            String limitText;
+            if (newLimitMinutes >= 60) {
+                long hours = newLimitMinutes / 60;
+                long minutes = newLimitMinutes % 60;
+                if (minutes == 0) {
+                    limitText = hours + " hour" + (hours != 1 ? "s" : "");
+                } else {
+                    limitText = hours + "h " + minutes + "m";
+                }
+            } else {
+                limitText = newLimitMinutes + " minute" + (newLimitMinutes != 1 ? "s" : "");
+            }
+            
+            String title = "Screen Time Limit Updated";
+            String message = "Your daily screen time limit has been changed to " + limitText + ". Screen time countdown has been reset.";
+            
+            // Create intent to open main activity
+            Intent intent = new Intent(context, MainActivity.class);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            PendingIntent pendingIntent = PendingIntent.getActivity(
+                context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_RULE_UPDATE)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setColor(context.getResources().getColor(android.R.color.holo_blue_light, null));
+            
+            // Show notification
+            manager.notify(NOTIFICATION_RULE_UPDATE, builder.build());
+            
+            // Update last notification time
+            prefs.edit().putLong("last_" + notificationKey, currentTime).apply();
+            
+            Log.d(TAG, "Rule update notification shown: New limit = " + newLimitMinutes + " minutes");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error showing rule update notification", e);
+        }
     }
 }

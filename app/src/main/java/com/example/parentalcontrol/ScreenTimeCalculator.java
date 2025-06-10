@@ -51,8 +51,11 @@ public class ScreenTimeCalculator {
                 
                 // Check if the server data has actually changed
                 if (lastUpdated != cachedLastUpdated) {
-                    Log.d(TAG, String.format("Screen time rule updated detected. Old timestamp: %d, New timestamp: %d", 
-                          cachedLastUpdated, lastUpdated));
+                    Log.d(TAG, String.format("🔄 Screen time rule update detected from web interface!"));
+                    Log.d(TAG, String.format("   Previous timestamp: %d (%s)", cachedLastUpdated, 
+                          cachedLastUpdated > 0 ? new java.util.Date(cachedLastUpdated).toString() : "Never"));
+                    Log.d(TAG, String.format("   New timestamp: %d (%s)", lastUpdated, new java.util.Date(lastUpdated).toString()));
+                    Log.d(TAG, String.format("   New daily limit: %d minutes", dailyLimitMinutes));
                     
                     // Reset the countdown start time since we have new rules
                     long currentTime = System.currentTimeMillis();
@@ -63,7 +66,7 @@ public class ScreenTimeCalculator {
                     editor.putInt(KEY_DAILY_LIMIT, dailyLimitMinutes);
                     editor.apply();
                     
-                    Log.d(TAG, "Screen time countdown reset due to server update. New limit: " + dailyLimitMinutes + " minutes");
+                    Log.d(TAG, "✅ Screen time countdown reset due to web interface update. New limit: " + dailyLimitMinutes + " minutes");
                     wasUpdated = true;
                 } else {
                     Log.d(TAG, "No change in screen time rules, keeping existing countdown");

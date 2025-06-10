@@ -170,30 +170,95 @@ public class ScreenTimeManager {
         }
     }
 
+    /**
+     * Resets the screen time countdown with a new limit from web interface
+     * This method is called when rule changes are detected from the web interface
+     * Unlike resetScreenTimeLimit(), this doesn't clear usage data, only resets the countdown
+     */
+    public void resetScreenTimeLimitWithNewLimit(long newLimitMinutes) {
+        Log.d("ScreenTimeManager", "Resetting screen time countdown with new limit from web interface: " + newLimitMinutes + " minutes");
+        
+        try {
+            // Update the daily limit in the repository and SharedPreferences
+            SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
+            prefs.edit()
+                .putLong("daily_limit_minutes", newLimitMinutes)
+                .remove("last_screen_time_check") // Reset check timestamps
+                .apply();
+            
+            // Save to local database (this will also reset countdown timing)
+            screenTimeRepo.saveScreenTimeRules(newLimitMinutes);
+            
+            // Reset the lock flag to allow new checks with updated limit
+            lockInProgress = false;
+            
+            // Cancel and restart alarms with new timing
+            cancelLimits();
+            
+            // Set up screen time monitoring with new limit
+            Intent intent = new Intent(context, ScreenTimeCheckReceiver.class);
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    0,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            );
+
+            // Check every 30 seconds for better synchronization
+            alarmManager.setRepeating(
+                    AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis(),
+                    30 * 1000, // 30 second interval
+                    pendingIntent
+            );
+            
+            // Restart bedtime enforcement
+            setupBedtimeEnforcement();
+            
+            // Sync the new rules with backend
+            syncScreenTimeRules(newLimitMinutes);
+            
+            Log.d("ScreenTimeManager", "Screen time countdown reset complete with new limit: " + newLimitMinutes + " minutes");
+            
+            // Show notification about the rule change
+            EnhancedAlertNotifier.showRuleUpdateNotification(context, newLimitMinutes);
+            
+        } catch (Exception e) {
+            Log.e("ScreenTimeManager", "Error resetting screen time limit with new limit", e);
+        }
+    }
+
 
 
     private static boolean lockInProgress = false;
     
     /**
-     * Enhanced screen time check with improved synchronization
+     * Enhanced screen time check with improved synchronization and web interface rule updates
      * This method now performs more frequent checks and better handles timing issues
      */
     public void checkScreenTime(Context context) {
         // Use the new calculator for more accurate calculation
         ScreenTimeCalculator calculator = new ScreenTimeCalculator(context);
-        long dailyLimitMinutes = screenTimeRepo.getDailyLimit();
+        
+        // Check for rule updates from web interface FIRST
+        ScreenTimeCalculator.ScreenTimeCountdownData countdownData = calculator.getCountdownData();
+        if (countdownData.wasUpdated) {
+            Log.d("ScreenTimeManager", "🔄 Web interface rule update detected - resetting countdown with new limit: " + countdownData.dailyLimitMinutes + " minutes");
+            resetScreenTimeLimitWithNewLimit(countdownData.dailyLimitMinutes);
+        }
+        
+        long dailyLimitMinutes = countdownData.dailyLimitMinutes; // Use the updated limit
         
         // Enhanced debugging
         Log.d("ScreenTimeManager", "=== ENHANCED SCREEN TIME CHECK START ===");
-        Log.d("ScreenTimeManager", "Daily limit from repository: " + dailyLimitMinutes + " minutes");
+        Log.d("ScreenTimeManager", "Daily limit from calculator: " + dailyLimitMinutes + " minutes");
         
         // Also check SharedPreferences for comparison
         SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", Context.MODE_PRIVATE);
         long sharedPrefLimit = prefs.getLong("daily_limit_minutes", 120);
         Log.d("ScreenTimeManager", "Daily limit from SharedPrefs: " + sharedPrefLimit + " minutes");
         
-        // Get both countdown and actual usage data for synchronization check
-        ScreenTimeCalculator.ScreenTimeCountdownData countdownData = calculator.getCountdownData();
+        // Get actual usage data for synchronization check
         long actualUsage = calculator.getTodayUsageMinutes();
         long countdownUsage = countdownData.usedMinutes;
         

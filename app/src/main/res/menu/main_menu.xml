@@ -26,4 +26,9 @@
         android:title="Test Enhanced Screen Time Sync"
         android:orderInCategory="120"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_test_web_rule_update"
+        android:title="Test Web Interface Rule Update"
+        android:orderInCategory="130"
+        app:showAsAction="never" />
 </menu>

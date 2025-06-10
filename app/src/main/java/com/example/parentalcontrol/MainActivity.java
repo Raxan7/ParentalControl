@@ -673,6 +673,10 @@ public class MainActivity extends AppCompatActivity {
             // Test enhanced screen time synchronization
             testEnhancedScreenTimeSync();
             return true;
+        } else if (item.getItemId() == R.id.menu_test_web_rule_update) {
+            // Test web interface rule update simulation
+            testWebInterfaceRuleUpdate();
+            return true;
         }
         return super.onOptionsItemSelected(item);
     }
@@ -853,5 +857,245 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) {
             Log.e("MainActivity", "Error unregistering immediate screen time limit receiver", e);
         }
+    }
+    
+    /**
+     * Test web interface rule update simulation
+     * This simulates what happens when a parent changes screen time rules from the web interface
+     */
+    private void testWebInterfaceRuleUpdate() {
+        try {
+            Log.d("MainActivity", "Starting web interface rule update test...");
+            
+            // Show options dialog for different test scenarios
+            String[] testOptions = {
+                "Increase limit to 3 hours (180 min)",
+                "Decrease limit to 1 hour (60 min)",
+                "Set custom limit",
+                "Simulate server timestamp update"
+            };
+            
+            new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Test Web Interface Rule Update")
+                .setMessage("Choose a test scenario to simulate rule updates from the web interface:")
+                .setItems(testOptions, (dialog, which) -> {
+                    switch (which) {
+                        case 0:
+                            simulateWebRuleUpdate(180); // 3 hours
+                            break;
+                        case 1:
+                            simulateWebRuleUpdate(60); // 1 hour
+                            break;
+                        case 2:
+                            showCustomLimitDialog();
+                            break;
+                        case 3:
+                            simulateServerTimestampUpdate();
+                            break;
+                    }
+                })
+                .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                .show();
+            
+        } catch (Exception e) {
+            Log.e("MainActivity", "Error starting web rule update test", e);
+            Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+    
+    /**
+     * Show dialog for custom limit input
+     */
+    private void showCustomLimitDialog() {
+        android.widget.EditText input = new android.widget.EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        input.setHint("Enter minutes (e.g., 90 for 1.5 hours)");
+        
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Set Custom Screen Time Limit")
+            .setMessage("Enter the new daily limit in minutes:")
+            .setView(input)
+            .setPositiveButton("Apply", (dialog, which) -> {
+                try {
+                    String text = input.getText().toString().trim();
+                    if (!text.isEmpty()) {
+                        long minutes = Long.parseLong(text);
+                        if (minutes > 0 && minutes <= 1440) { // Max 24 hours
+                            simulateWebRuleUpdate(minutes);
+                        } else {
+                            Toast.makeText(this, "Please enter a value between 1 and 1440 minutes", Toast.LENGTH_LONG).show();
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    Toast.makeText(this, "Please enter a valid number", Toast.LENGTH_LONG).show();
+                }
+            })
+            .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+            .show();
+    }
+    
+    /**
+     * Simulate a web interface rule update by directly updating the database
+     */
+    private void simulateWebRuleUpdate(long newLimitMinutes) {
+        showLoading("Simulating web interface rule update...");
+        
+        new Thread(() -> {
+            try {
+                Log.d("MainActivity", "🧪 Simulating web interface rule update to " + newLimitMinutes + " minutes");
+                
+                // Get database helper
+                AppUsageDatabaseHelper dbHelper = ServiceLocator.getInstance(this).getDatabaseHelper();
+                android.database.sqlite.SQLiteDatabase db = dbHelper.getWritableDatabase();
+                
+                // Update the screen_time_rules table with new timestamp to simulate web interface change
+                long currentTime = System.currentTimeMillis();
+                String updateSql = "INSERT OR REPLACE INTO screen_time_rules (id, daily_limit_minutes, last_updated) VALUES (1, ?, ?)";
+                db.execSQL(updateSql, new Object[]{newLimitMinutes, currentTime});
+                
+                Log.d("MainActivity", "✅ Database updated with new rule: " + newLimitMinutes + " minutes, timestamp: " + currentTime);
+                
+                // Wait a moment to ensure the change is registered
+                Thread.sleep(1000);
+                
+                // Now trigger a screen time check which should detect the rule change
+                ScreenTimeManager screenTimeManager = ServiceLocator.getInstance(this).getScreenTimeManager(this);
+                screenTimeManager.checkScreenTime(this);
+                
+                runOnUiThread(() -> {
+                    hideLoading();
+                    
+                    // Format time for display
+                    String timeText;
+                    if (newLimitMinutes >= 60) {
+                        long hours = newLimitMinutes / 60;
+                        long mins = newLimitMinutes % 60;
+                        timeText = hours + "h" + (mins > 0 ? " " + mins + "m" : "");
+                    } else {
+                        timeText = newLimitMinutes + " minutes";
+                    }
+                    
+                    Toast.makeText(this, 
+                        "✅ Web interface rule update simulated!\n" +
+                        "New limit: " + timeText + "\n" +
+                        "Screen time countdown has been reset.\n" +
+                        "Check notifications for update confirmation.",
+                        Toast.LENGTH_LONG).show();
+                        
+                    // Show the current screen time data
+                    showCurrentScreenTimeData();
+                });
+                
+                db.close();
+                
+            } catch (Exception e) {
+                Log.e("MainActivity", "Error simulating web rule update", e);
+                runOnUiThread(() -> {
+                    hideLoading();
+                    Toast.makeText(this, 
+                        "Error simulating rule update: " + e.getMessage(), 
+                        Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+    
+    /**
+     * Simulate just a server timestamp update without changing the limit
+     */
+    private void simulateServerTimestampUpdate() {
+        showLoading("Simulating server timestamp update...");
+        
+        new Thread(() -> {
+            try {
+                // Get current limit from database
+                AppUsageDatabaseHelper dbHelper = ServiceLocator.getInstance(this).getDatabaseHelper();
+                android.database.sqlite.SQLiteDatabase db = dbHelper.getReadableDatabase();
+                
+                android.database.Cursor cursor = db.rawQuery(
+                    "SELECT daily_limit_minutes FROM screen_time_rules ORDER BY last_updated DESC LIMIT 1", 
+                    null
+                );
+                
+                long currentLimit = 120; // Default
+                if (cursor.moveToFirst()) {
+                    currentLimit = cursor.getLong(0);
+                }
+                cursor.close();
+                
+                // Make variable effectively final for lambda
+                final long finalCurrentLimit = currentLimit;
+                
+                // Update with same limit but new timestamp
+                db = dbHelper.getWritableDatabase();
+                long newTimestamp = System.currentTimeMillis();
+                String updateSql = "UPDATE screen_time_rules SET last_updated = ? WHERE id = 1";
+                db.execSQL(updateSql, new Object[]{newTimestamp});
+                
+                Log.d("MainActivity", "🧪 Server timestamp updated: " + newTimestamp + " (same limit: " + finalCurrentLimit + ")");
+                
+                Thread.sleep(1000);
+                
+                // Trigger check
+                ScreenTimeManager screenTimeManager = ServiceLocator.getInstance(this).getScreenTimeManager(this);
+                screenTimeManager.checkScreenTime(this);
+                
+                runOnUiThread(() -> {
+                    hideLoading();
+                    Toast.makeText(this, 
+                        "📡 Server timestamp update simulated\n" +
+                        "Limit unchanged: " + finalCurrentLimit + " minutes\n" +
+                        "Countdown reset due to server sync",
+                        Toast.LENGTH_LONG).show();
+                });
+                
+                db.close();
+                
+            } catch (Exception e) {
+                Log.e("MainActivity", "Error simulating timestamp update", e);
+                runOnUiThread(() -> {
+                    hideLoading();
+                    Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+    
+    /**
+     * Show current screen time data for verification
+     */
+    private void showCurrentScreenTimeData() {
+        new Thread(() -> {
+            try {
+                ScreenTimeCalculator calculator = new ScreenTimeCalculator(this);
+                ScreenTimeCalculator.ScreenTimeCountdownData data = calculator.getCountdownData();
+                
+                runOnUiThread(() -> {
+                    String message = String.format(
+                        "Current Screen Time Status:\n\n" +
+                        "📊 Daily Limit: %d minutes\n" +
+                        "⏱️ Used Today: %d minutes\n" +
+                        "⏳ Remaining: %d minutes\n" +
+                        "📈 Usage: %.1f%%\n" +
+                        "🔄 Rules Updated: %s",
+                        data.dailyLimitMinutes,
+                        data.usedMinutes,
+                        data.remainingMinutes,
+                        data.percentageUsed,
+                        data.wasUpdated ? "Yes" : "No"
+                    );
+                    
+                    new androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("Screen Time Status")
+                        .setMessage(message)
+                        .setPositiveButton("OK", null)
+                        .setIcon(android.R.drawable.ic_dialog_info)
+                        .show();
+                });
+                
+            } catch (Exception e) {
+                Log.e("MainActivity", "Error getting screen time data", e);
+            }
+        }).start();
     }
 }
