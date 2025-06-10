@@ -164,6 +164,10 @@
         </receiver>
         <receiver android:name=".LockDeviceReceiver" />
         <receiver android:name=".ScreenTimeCheckReceiver" />
+        <receiver android:name=".BedtimeCheckReceiver" />
+        <receiver android:name=".ImmediateScreenTimeLimitReceiver" 
+            android:enabled="true"
+            android:exported="false" />
         <receiver android:name=".DeviceAdminReceiverCustom"
             android:exported="true"
             android:permission="android.permission.BIND_DEVICE_ADMIN">

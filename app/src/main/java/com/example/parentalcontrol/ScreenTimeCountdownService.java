@@ -79,11 +79,22 @@ public class ScreenTimeCountdownService extends Service {
 
     private void startCountdown() {
         // Main countdown runnable - updates every second for smooth countdown
+        // But increases frequency when close to limits
         countdownRunnable = new Runnable() {
             @Override
             public void run() {
-                updateCountdownDisplay();
-                handler.postDelayed(this, UPDATE_INTERVAL);
+                try {
+                    updateCountdownDisplay();
+                    
+                    // Determine next update interval based on remaining time
+                    long nextInterval = getAdaptiveUpdateInterval();
+                    handler.postDelayed(this, nextInterval);
+                    
+                } catch (Exception e) {
+                    Log.e(TAG, "Error in countdown runnable", e);
+                    // Fallback to normal interval
+                    handler.postDelayed(this, UPDATE_INTERVAL);
+                }
             }
         };
         
@@ -100,16 +111,64 @@ public class ScreenTimeCountdownService extends Service {
         handler.post(countdownRunnable);
         handler.post(ruleCheckRunnable);
     }
-
+    
     /**
-     * Update the countdown display (called every second)
+     * Get adaptive update interval based on remaining screen time
+     * Updates more frequently when close to limits
+     */
+    private long getAdaptiveUpdateInterval() {
+        try {
+            ScreenTimeCalculator.ScreenTimeCountdownData data = screenTimeCalculator.getCountdownData();
+            long remainingMinutes = data.remainingMinutes;
+            
+            if (remainingMinutes <= 0) {
+                // Limit reached - update every 500ms for immediate response
+                return 500;
+            } else if (remainingMinutes <= 5) {
+                // Critical zone - update every 1 second
+                return 1000;
+            } else if (remainingMinutes <= 15) {
+                // Warning zone - update every 2 seconds
+                return 2000;
+            } else if (remainingMinutes <= 30) {
+                // Caution zone - update every 5 seconds
+                return 5000;
+            } else {
+                // Normal zone - update every 10 seconds
+                return 10000;
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error calculating adaptive interval", e);
+            return UPDATE_INTERVAL; // Fallback to default
+        }
+    }
+    
+    /**
+     * Enhanced countdown display update with immediate limit detection
      */
     private void updateCountdownDisplay() {
         try {
             // Get countdown data (uses cached values for stability)
             ScreenTimeCalculator.ScreenTimeCountdownData data = screenTimeCalculator.getCountdownData();
             
-            // Update notification
+            // Check for immediate limit exceeded condition
+            if (data.isLimitExceeded()) {
+                Log.d(TAG, "🚨 IMMEDIATE LIMIT DETECTION: Screen time limit exceeded during countdown update");
+                
+                // Send immediate broadcast to trigger lock
+                Intent lockBroadcast = new Intent();
+                lockBroadcast.setAction("com.example.parentalcontrol.IMMEDIATE_SCREEN_TIME_LIMIT");
+                lockBroadcast.putExtra("used_minutes", (int) data.usedMinutes);
+                lockBroadcast.putExtra("limit_minutes", (int) data.dailyLimitMinutes);
+                sendBroadcast(lockBroadcast);
+                
+                // Trigger immediate screen time check
+                ScreenTimeManager screenTimeManager = new ScreenTimeManager(this);
+                screenTimeManager.checkScreenTime(this);
+            }
+            
+            // Update notification with current status
             updateNotification(data);
             
             // Send broadcast for UI updates
@@ -121,12 +180,67 @@ public class ScreenTimeCountdownService extends Service {
             broadcastIntent.putExtra("was_updated", data.wasUpdated);
             sendBroadcast(broadcastIntent);
             
+            // Send warning notifications based on remaining time
+            sendProgressiveWarningNotifications(data);
+            
             if (data.wasUpdated) {
                 Log.d(TAG, "Screen time rules were updated: " + data.toString());
             }
             
         } catch (Exception e) {
             Log.e(TAG, "Error updating countdown display", e);
+        }
+    }
+    
+    /**
+     * Send progressive warning notifications based on remaining time
+     */
+    private void sendProgressiveWarningNotifications(ScreenTimeCalculator.ScreenTimeCountdownData data) {
+        try {
+            long remainingMinutes = data.remainingMinutes;
+            
+            // Only send notifications if we're getting close to the limit
+            if (remainingMinutes > 30) {
+                return; // No notifications needed yet
+            }
+            
+            ScreenTimeCheckReceiver.NotificationPriority priority;
+            String title;
+            String message;
+            
+            if (remainingMinutes <= 0) {
+                // Critical - limit reached
+                priority = ScreenTimeCheckReceiver.NotificationPriority.CRITICAL;
+                title = "Screen Time Limit Reached!";
+                message = "Your daily screen time limit of " + data.dailyLimitMinutes + " minutes has been reached. Device will lock now.";
+                
+            } else if (remainingMinutes <= 5) {
+                // High priority - 5 minutes or less
+                priority = ScreenTimeCheckReceiver.NotificationPriority.HIGH;
+                title = "Screen Time Critical - " + remainingMinutes + " min left";
+                message = "Only " + remainingMinutes + " minutes remaining! Device will lock when limit is reached.";
+                
+            } else if (remainingMinutes <= 15) {
+                // Normal priority - 15 minutes or less
+                priority = ScreenTimeCheckReceiver.NotificationPriority.NORMAL;
+                title = "Screen Time Warning - " + remainingMinutes + " min left";
+                message = "You have " + remainingMinutes + " minutes of screen time remaining today.";
+                
+            } else if (remainingMinutes <= 30) {
+                // Low priority - 30 minutes or less
+                priority = ScreenTimeCheckReceiver.NotificationPriority.LOW;
+                title = "Screen Time Reminder";
+                message = "You have " + remainingMinutes + " minutes remaining of your daily " + data.dailyLimitMinutes + " minute limit.";
+                
+            } else {
+                return; // No notification needed
+            }
+            
+            // Send the notification
+            EnhancedAlertNotifier.showScreenTimeNotification(this, title, message, priority);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error sending progressive warning notifications", e);
         }
     }
 

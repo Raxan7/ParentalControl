@@ -6,9 +6,11 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.BroadcastReceiver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.database.sqlite.SQLiteDatabase;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
@@ -202,7 +204,7 @@ public class PeriodicHttpSyncService extends Service {
 
     private void syncScreenTimeRules(String deviceId, String authToken) {
         try {
-            Log.d(TAG, "🔗 Making HTTP request to sync screen time rules...");
+            Log.d(TAG, "🔗 Making HTTP request to sync screen time rules and bedtime data...");
             
             OkHttpClient client = new OkHttpClient.Builder()
                     .connectTimeout(10, TimeUnit.SECONDS)
@@ -221,8 +223,13 @@ public class PeriodicHttpSyncService extends Service {
                 
                 // Parse and save the response
                 JSONObject json = new JSONObject(responseBody);
+                
+                // Initialize default daily limit
+                long dailyLimit = 120; // Default value
+                
+                // Handle daily limit
                 if (json.has("daily_limit_minutes")) {
-                    long dailyLimit = json.getLong("daily_limit_minutes");
+                    dailyLimit = json.getLong("daily_limit_minutes");
                     Log.d(TAG, "Updated daily screen time limit: " + dailyLimit + " minutes");
                     
                     // Save to shared preferences
@@ -231,6 +238,25 @@ public class PeriodicHttpSyncService extends Service {
                             .putLong("daily_limit_minutes", dailyLimit)
                             .apply();
                 }
+                
+                // Handle bedtime data
+                String bedtimeStart = json.optString("bedtime_start", null);
+                String bedtimeEnd = json.optString("bedtime_end", null);
+                
+                if (bedtimeStart != null && !bedtimeStart.equals("null") && !bedtimeStart.trim().isEmpty() &&
+                    bedtimeEnd != null && !bedtimeEnd.equals("null") && !bedtimeEnd.trim().isEmpty()) {
+                    
+                    Log.d(TAG, "Updated bedtime rules: " + bedtimeStart + " to " + bedtimeEnd);
+                    
+                    // Save bedtime data to database
+                    saveBedtimeRulesToDatabase(dailyLimit, bedtimeStart, bedtimeEnd);
+                } else {
+                    Log.d(TAG, "No bedtime rules found or bedtime rules are empty");
+                    
+                    // Save without bedtime data
+                    saveBedtimeRulesToDatabase(dailyLimit, null, null);
+                }
+                
             } else {
                 Log.w(TAG, "⚠️ Screen time rules HTTP request failed: " + response.code());
             }
@@ -337,5 +363,34 @@ public class PeriodicHttpSyncService extends Service {
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
                 .build();
+    }
+    
+    /**
+     * Save bedtime rules to local database for enforcement
+     */
+    private void saveBedtimeRulesToDatabase(long dailyLimitMinutes, String bedtimeStart, String bedtimeEnd) {
+        try {
+            AppUsageDatabaseHelper dbHelper = ServiceLocator.getInstance(this).getDatabaseHelper();
+            SQLiteDatabase db = dbHelper.getWritableDatabase();
+            
+            // Insert new rule (the database helper should handle this)
+            ContentValues values = new ContentValues();
+            values.put("daily_limit_minutes", dailyLimitMinutes);
+            values.put("bedtime_start", bedtimeStart);
+            values.put("bedtime_end", bedtimeEnd);
+            values.put("last_updated", System.currentTimeMillis());
+            
+            long result = db.insert("screen_time_rules", null, values);
+            db.close();
+            
+            if (result != -1) {
+                Log.d(TAG, "✅ Bedtime rules saved to database successfully");
+            } else {
+                Log.w(TAG, "⚠️ Failed to save bedtime rules to database");
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Error saving bedtime rules to database", e);
+        }
     }
 }

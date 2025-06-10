@@ -14,20 +14,27 @@ public class LockDeviceReceiver extends BroadcastReceiver {
     private static final int LOCK_TIME = 15000; // 15 seconds
     @Override
     public void onReceive(Context context, Intent intent) {
-        Log.d("LockDeviceReceiver", "Screen time limit exceeded - executing device lock");
+        String lockReason = intent.getStringExtra("lock_reason");
         
-        // Implement device locking logic here
-        // For example:
-        // 1. Show a lockdown screen
-        // 2. Disable certain apps
-        // 3. Notify parents
-
-        // Temporary implementation - just show a notification
-        AlertNotifier.showNotification(
-                context,
-                "Screen Time Limit Reached",
-                "Your daily screen time limit has been reached"
-        );
+        if ("bedtime".equals(lockReason)) {
+            Log.d("LockDeviceReceiver", "Bedtime period active - executing device lock");
+            
+            // Show bedtime-specific notification
+            AlertNotifier.showNotification(
+                    context,
+                    "Bedtime Enforced",
+                    "Device locked due to bedtime restrictions"
+            );
+        } else {
+            Log.d("LockDeviceReceiver", "Screen time limit exceeded - executing device lock");
+            
+            // Show screen time notification
+            AlertNotifier.showNotification(
+                    context,
+                    "Screen Time Limit Reached",
+                    "Your daily screen time limit has been reached"
+            );
+        }
 
         // Lock the device
         DevicePolicyManager devicePolicyManager = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);

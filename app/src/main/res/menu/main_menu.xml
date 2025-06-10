@@ -21,4 +21,9 @@
         android:title="VPN Content Filter Test"
         android:orderInCategory="110"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_test_enhanced_sync"
+        android:title="Test Enhanced Screen Time Sync"
+        android:orderInCategory="120"
+        app:showAsAction="never" />
 </menu>

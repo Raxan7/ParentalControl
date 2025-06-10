@@ -76,15 +76,18 @@ public class ScreenTimeManager {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        // Check every minute (testing setup)
+        // Check every 30 seconds for better synchronization with countdown service
         alarmManager.setRepeating(
                 AlarmManager.RTC_WAKEUP,
                 System.currentTimeMillis(),
-                60 * 1000, // 1 minute interval
+                30 * 1000, // 30 second interval (improved synchronization)
                 pendingIntent
         );
 
         Log.d("ScreenTimeManager", "Daily limit set successfully. Alarm scheduled for periodic checks.");
+
+        // Set up bedtime enforcement as well
+        setupBedtimeEnforcement();
 
         // Sync rules with backend
         syncScreenTimeRules(maxMinutes);
@@ -114,9 +117,10 @@ public class ScreenTimeManager {
     }
 
     /**
-     * Cancels any existing screen time limits
+     * Cancels any existing screen time limits and bedtime enforcement
      */
     public void cancelLimits() {
+        // Cancel screen time checks
         Intent intent = new Intent(context, ScreenTimeCheckReceiver.class);
         PendingIntent pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -125,6 +129,9 @@ public class ScreenTimeManager {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         alarmManager.cancel(pendingIntent);
+        
+        // Cancel bedtime enforcement
+        cancelBedtimeEnforcement();
     }    /**
      * Resets the screen time limit and clears all usage data for today
      * This effectively gives the user a fresh start with their screen time
@@ -153,6 +160,9 @@ public class ScreenTimeManager {
             // Reset the lock flag to allow new checks
             lockInProgress = false;
             
+            // Restart bedtime enforcement with default settings
+            setupBedtimeEnforcement();
+            
             Log.d("ScreenTimeManager", "Screen time limit reset complete - new limit: 120 minutes");
             
         } catch (Exception e) {
@@ -164,13 +174,17 @@ public class ScreenTimeManager {
 
     private static boolean lockInProgress = false;
     
+    /**
+     * Enhanced screen time check with improved synchronization
+     * This method now performs more frequent checks and better handles timing issues
+     */
     public void checkScreenTime(Context context) {
         // Use the new calculator for more accurate calculation
         ScreenTimeCalculator calculator = new ScreenTimeCalculator(context);
         long dailyLimitMinutes = screenTimeRepo.getDailyLimit();
         
         // Enhanced debugging
-        Log.d("ScreenTimeManager", "=== SCREEN TIME CHECK START ===");
+        Log.d("ScreenTimeManager", "=== ENHANCED SCREEN TIME CHECK START ===");
         Log.d("ScreenTimeManager", "Daily limit from repository: " + dailyLimitMinutes + " minutes");
         
         // Also check SharedPreferences for comparison
@@ -178,32 +192,102 @@ public class ScreenTimeManager {
         long sharedPrefLimit = prefs.getLong("daily_limit_minutes", 120);
         Log.d("ScreenTimeManager", "Daily limit from SharedPrefs: " + sharedPrefLimit + " minutes");
         
-        // Get current usage
-        long currentUsage = calculator.getTodayUsageMinutes();
-        Log.d("ScreenTimeManager", "Current usage today: " + currentUsage + " minutes");
-        Log.d("ScreenTimeManager", "Limit exceeded check: " + currentUsage + " >= " + dailyLimitMinutes + " ? " + (currentUsage >= dailyLimitMinutes));
+        // Get both countdown and actual usage data for synchronization check
+        ScreenTimeCalculator.ScreenTimeCountdownData countdownData = calculator.getCountdownData();
+        long actualUsage = calculator.getTodayUsageMinutes();
+        long countdownUsage = countdownData.usedMinutes;
+        
+        Log.d("ScreenTimeManager", String.format("Usage comparison - Actual: %d min, Countdown: %d min, Remaining: %d min", 
+                actualUsage, countdownUsage, countdownData.remainingMinutes));
+        
+        // Check for synchronization issues
+        long usageDifference = Math.abs(actualUsage - countdownUsage);
+        if (usageDifference > 2) { // More than 2 minutes difference
+            Log.w("ScreenTimeManager", String.format("⚠️ SYNC WARNING: Usage difference detected - Actual: %d, Countdown: %d (diff: %d)", 
+                    actualUsage, countdownUsage, usageDifference));
+        }
+        
+        // Use the more conservative (higher) usage value for limit checking
+        long finalUsage = Math.max(actualUsage, countdownUsage);
+        boolean limitExceeded = finalUsage >= dailyLimitMinutes;
+        
+        Log.d("ScreenTimeManager", String.format("Final usage: %d min, Limit: %d min, Exceeded: %s", 
+                finalUsage, dailyLimitMinutes, limitExceeded));
 
-        if (calculator.isLimitExceeded(dailyLimitMinutes)) {
+        if (limitExceeded) {
             // Prevent multiple simultaneous lock attempts
             if (!lockInProgress) {
                 lockInProgress = true;
-                Log.d("ScreenTimeManager", "🚨 Daily limit exceeded - triggering device lock (Usage: " + currentUsage + "min, Limit: " + dailyLimitMinutes + "min)");
+                Log.d("ScreenTimeManager", "🚨 Daily limit exceeded - triggering device lock (Usage: " + finalUsage + "min, Limit: " + dailyLimitMinutes + "min)");
+                
+                // Clear any existing screen time notifications
+                EnhancedAlertNotifier.clearScreenTimeNotifications(context);
                 
                 // Trigger device lock
                 Intent intent = new Intent(context, LockDeviceReceiver.class);
+                intent.putExtra("lock_reason", "screen_time");
                 context.sendBroadcast(intent);
                 
                 // Reset lock flag after a delay to prevent spam
-                new android.os.Handler().postDelayed(() -> lockInProgress = false, 30000); // 30 seconds
+                new android.os.Handler().postDelayed(() -> {
+                    lockInProgress = false;
+                    Log.d("ScreenTimeManager", "Lock flag reset - ready for new checks");
+                }, 30000); // 30 seconds
             } else {
                 Log.d("ScreenTimeManager", "Lock already in progress, skipping");
             }
         } else {
             ScreenTimeCalculator.ScreenTimeData data = calculator.getScreenTimeData(dailyLimitMinutes);
             Log.d("ScreenTimeManager", "✅ Screen time within limits: " + data.toString());
+            
+            // Reset lock flag if we're back within limits (shouldn't happen normally)
+            if (lockInProgress) {
+                lockInProgress = false;
+                Log.d("ScreenTimeManager", "Lock flag reset - usage is back within limits");
+            }
         }
-        Log.d("ScreenTimeManager", "=== SCREEN TIME CHECK END ===");
+        Log.d("ScreenTimeManager", "=== ENHANCED SCREEN TIME CHECK END ===");
     }
 
+    /**
+     * Sets up bedtime enforcement with periodic checks
+     */
+    public void setupBedtimeEnforcement() {
+        Log.d("ScreenTimeManager", "Setting up bedtime enforcement");
+        
+        // Schedule periodic bedtime checks every 5 minutes
+        Intent bedtimeIntent = new Intent(context, BedtimeCheckReceiver.class);
+        PendingIntent bedtimePendingIntent = PendingIntent.getBroadcast(
+                context,
+                1001, // Different request code from screen time
+                bedtimeIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        // Check bedtime every 5 minutes (more frequent than screen time for better enforcement)
+        alarmManager.setRepeating(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis(),
+                5 * 60 * 1000, // 5 minute interval
+                bedtimePendingIntent
+        );
+
+        Log.d("ScreenTimeManager", "Bedtime enforcement scheduled for periodic checks every 5 minutes");
+    }
+
+    /**
+     * Cancels bedtime enforcement alarms
+     */
+    public void cancelBedtimeEnforcement() {
+        Intent bedtimeIntent = new Intent(context, BedtimeCheckReceiver.class);
+        PendingIntent bedtimePendingIntent = PendingIntent.getBroadcast(
+                context,
+                1001,
+                bedtimeIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        alarmManager.cancel(bedtimePendingIntent);
+        Log.d("ScreenTimeManager", "Bedtime enforcement cancelled");
+    }
 
 }

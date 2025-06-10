@@ -4,9 +4,11 @@ package com.example.parentalcontrol;
 import android.app.admin.DevicePolicyManager;
 import android.app.AppOpsManager;
 import android.app.ProgressDialog;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -59,6 +61,7 @@ public class MainActivity extends AppCompatActivity {
     private AppUsageRepository repository;
     private ProgressDialog progressDialog;
     private FrameLayout fragmentContainer;
+    private BroadcastReceiver immediateScreenTimeLimitReceiver;
 
     private boolean isDeviceRegistered() {
         SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
@@ -74,6 +77,12 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        
+        // Initialize enhanced notification system
+        EnhancedAlertNotifier.initializeChannels(this);
+        
+        // Register immediate screen time limit receiver
+        registerImmediateScreenTimeLimitReceiver();
 
         fragmentContainer = findViewById(R.id.fragment_container);
 
@@ -266,6 +275,9 @@ public class MainActivity extends AppCompatActivity {
                         ScreenTimeManager screenTimeManager = ServiceLocator.getInstance(MainActivity.this)
                                 .getScreenTimeManager(MainActivity.this);
                         screenTimeManager.setDailyLimit(120);
+                        
+                        // Ensure bedtime enforcement is also set up independently
+                        screenTimeManager.setupBedtimeEnforcement();
                         
                         // Load the screen time countdown fragment
                         loadScreenTimeCountdownFragment();
@@ -657,8 +669,53 @@ public class MainActivity extends AppCompatActivity {
             // Reset screen time limit and usage data
             resetScreenTimeLimit();
             return true;
+        } else if (item.getItemId() == R.id.menu_test_enhanced_sync) {
+            // Test enhanced screen time synchronization
+            testEnhancedScreenTimeSync();
+            return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+    
+    /**
+     * Test enhanced screen time synchronization and notification system
+     */
+    private void testEnhancedScreenTimeSync() {
+        try {
+            Log.d("MainActivity", "Starting enhanced screen time sync test...");
+            
+            // Show progress dialog
+            showLoading("Testing enhanced sync system...");
+            
+            // Run tests in background thread
+            new Thread(() -> {
+                try {
+                    EnhancedScreenTimeSyncTest syncTest = new EnhancedScreenTimeSyncTest(this);
+                    syncTest.runAllTests();
+                    syncTest.generateTestReport();
+                    
+                    runOnUiThread(() -> {
+                        hideLoading();
+                        Toast.makeText(this, 
+                                "Enhanced sync test completed! Check logs for results.", 
+                                Toast.LENGTH_LONG).show();
+                    });
+                    
+                } catch (Exception e) {
+                    Log.e("MainActivity", "Error in enhanced sync test", e);
+                    runOnUiThread(() -> {
+                        hideLoading();
+                        Toast.makeText(this, 
+                                "Enhanced sync test failed: " + e.getMessage(), 
+                                Toast.LENGTH_LONG).show();
+                    });
+                }
+            }).start();
+            
+        } catch (Exception e) {
+            Log.e("MainActivity", "Error starting enhanced sync test", e);
+            Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     /**
@@ -730,6 +787,71 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Exception e) {
             Log.e("MainActivity", "Error refreshing screen time display", e);
+        }
+    }
+    
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Unregister the immediate screen time limit receiver
+        unregisterImmediateScreenTimeLimitReceiver();
+    }
+
+    /**
+     * Register receiver for immediate screen time limit detection
+     */
+    private void registerImmediateScreenTimeLimitReceiver() {
+        try {
+            IntentFilter filter = new IntentFilter("com.example.parentalcontrol.IMMEDIATE_SCREEN_TIME_LIMIT");
+            
+            immediateScreenTimeLimitReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    int usedMinutes = intent.getIntExtra("used_minutes", 0);
+                    int limitMinutes = intent.getIntExtra("limit_minutes", 120);
+                    
+                    Log.d("MainActivity", String.format("🚨 IMMEDIATE LIMIT DETECTED: %d/%d minutes used", 
+                            usedMinutes, limitMinutes));
+                    
+                    // Show immediate notification
+                    EnhancedAlertNotifier.showScreenTimeNotification(
+                        MainActivity.this,
+                        "Screen Time Limit Reached!",
+                        "Daily limit of " + limitMinutes + " minutes exceeded. Device will lock now.",
+                        ScreenTimeCheckReceiver.NotificationPriority.CRITICAL
+                    );
+                    
+                    // Trigger immediate screen time check
+                    try {
+                        ScreenTimeManager screenTimeManager = ServiceLocator.getInstance(MainActivity.this)
+                                .getScreenTimeManager(MainActivity.this);
+                        screenTimeManager.checkScreenTime(MainActivity.this);
+                    } catch (Exception e) {
+                        Log.e("MainActivity", "Error in immediate screen time check", e);
+                    }
+                }
+            };
+            
+            registerReceiver(immediateScreenTimeLimitReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            Log.d("MainActivity", "Immediate screen time limit receiver registered");
+            
+        } catch (Exception e) {
+            Log.e("MainActivity", "Error registering immediate screen time limit receiver", e);
+        }
+    }
+    
+    /**
+     * Unregister the immediate screen time limit receiver
+     */
+    private void unregisterImmediateScreenTimeLimitReceiver() {
+        try {
+            if (immediateScreenTimeLimitReceiver != null) {
+                unregisterReceiver(immediateScreenTimeLimitReceiver);
+                immediateScreenTimeLimitReceiver = null;
+                Log.d("MainActivity", "Immediate screen time limit receiver unregistered");
+            }
+        } catch (Exception e) {
+            Log.e("MainActivity", "Error unregistering immediate screen time limit receiver", e);
         }
     }
 }
