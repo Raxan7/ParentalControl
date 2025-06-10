@@ -37,9 +37,12 @@ public class EnhancedAlertNotifier {
     private static final int NOTIFICATION_BEDTIME_CRITICAL = 5004;
     private static final int NOTIFICATION_RULE_UPDATE = 5005;
     
-    // Spam prevention
+    // Spam prevention - Different intervals for different priority levels
     private static final String PREFS_NAME = "notification_prefs";
-    private static final long NOTIFICATION_COOLDOWN_MS = 60000; // 1 minute between same type notifications
+    private static final long NOTIFICATION_COOLDOWN_LOW_MS = 10 * 60 * 1000; // 10 minutes for low priority
+    private static final long NOTIFICATION_COOLDOWN_NORMAL_MS = 5 * 60 * 1000; // 5 minutes for normal
+    private static final long NOTIFICATION_COOLDOWN_HIGH_MS = 3 * 60 * 1000; // 3 minutes for high priority
+    private static final long NOTIFICATION_COOLDOWN_CRITICAL_MS = 1 * 60 * 1000; // 1 minute for critical (limit reached)
     
     /**
      * Initialize notification channels
@@ -140,9 +143,9 @@ public class EnhancedAlertNotifier {
                 break;
         }
         
-        // Check for notification spam prevention
-        if (!shouldShowNotification(context, "screen_time_" + priority.name())) {
-            Log.d(TAG, "Skipping notification due to cooldown: " + title);
+        // Check for notification spam prevention with priority-based intervals
+        if (!shouldShowNotification(context, "screen_time_" + priority.name(), priority)) {
+            Log.d(TAG, "Skipping notification due to cooldown: " + title + " (Priority: " + priority + ")");
             return;
         }
         
@@ -227,14 +230,55 @@ public class EnhancedAlertNotifier {
     }
     
     /**
-     * Check if we should show notification (spam prevention)
+     * Check if we should show notification (spam prevention with priority-based intervals)
+     */
+    private static boolean shouldShowNotification(Context context, String notificationType, 
+            ScreenTimeCheckReceiver.NotificationPriority priority) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        long lastNotificationTime = prefs.getLong("last_" + notificationType, 0);
+        long currentTime = System.currentTimeMillis();
+        
+        // Get appropriate cooldown period based on priority
+        long cooldownPeriod;
+        switch (priority) {
+            case LOW:
+                cooldownPeriod = NOTIFICATION_COOLDOWN_LOW_MS;
+                break;
+            case NORMAL:
+                cooldownPeriod = NOTIFICATION_COOLDOWN_NORMAL_MS;
+                break;
+            case HIGH:
+                cooldownPeriod = NOTIFICATION_COOLDOWN_HIGH_MS;
+                break;
+            case CRITICAL:
+                cooldownPeriod = NOTIFICATION_COOLDOWN_CRITICAL_MS;
+                break;
+            default:
+                cooldownPeriod = NOTIFICATION_COOLDOWN_NORMAL_MS;
+                break;
+        }
+        
+        boolean shouldShow = (currentTime - lastNotificationTime) >= cooldownPeriod;
+        
+        if (!shouldShow) {
+            long timeRemaining = cooldownPeriod - (currentTime - lastNotificationTime);
+            Log.d(TAG, "Notification cooldown active for " + notificationType + 
+                  ". Time remaining: " + (timeRemaining / 1000) + " seconds");
+        }
+        
+        return shouldShow;
+    }
+    
+    /**
+     * Overloaded method for bedtime notifications (maintains backward compatibility)
      */
     private static boolean shouldShowNotification(Context context, String notificationType) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         long lastNotificationTime = prefs.getLong("last_" + notificationType, 0);
         long currentTime = System.currentTimeMillis();
         
-        return (currentTime - lastNotificationTime) >= NOTIFICATION_COOLDOWN_MS;
+        // Use normal cooldown for bedtime notifications
+        return (currentTime - lastNotificationTime) >= NOTIFICATION_COOLDOWN_NORMAL_MS;
     }
     
     /**

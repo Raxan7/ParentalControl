@@ -377,24 +377,29 @@ public class ScreenTimeCalculator {
     }
 
     /**
-     * Debug method to compare wall-clock time vs actual usage tracking
-     * Helps identify timing discrepancies
+     * Debug method to monitor timing accuracy in real-time
      */
     public void debugTimingAccuracy() {
-        long todayStart = getStartOfDay();
-        long currentTime = System.currentTimeMillis();
-        long wallClockMinutesSinceStartOfDay = (currentTime - todayStart) / (60 * 1000);
-        long actualUsageMinutes = getTodayUsageMinutes();
-        
-        float usagePercentageOfWallClock = wallClockMinutesSinceStartOfDay > 0 ? 
-            (actualUsageMinutes * 100f / wallClockMinutesSinceStartOfDay) : 0f;
-        
-        Log.d(TAG, "=== TIMING ACCURACY DEBUG ===");
-        Log.d(TAG, String.format("Wall-clock time since start of day: %d minutes", wallClockMinutesSinceStartOfDay));
-        Log.d(TAG, String.format("Actual tracked usage: %d minutes", actualUsageMinutes));
-        Log.d(TAG, String.format("Usage efficiency: %.1f%% (actual vs wall-clock)", usagePercentageOfWallClock));
-        Log.d(TAG, String.format("Time ratio: 1 minute tracked = %.2f minutes real time", 
-            wallClockMinutesSinceStartOfDay > 0 ? (wallClockMinutesSinceStartOfDay / (float)actualUsageMinutes) : 0f));
-        Log.d(TAG, "=== END TIMING DEBUG ===");
+        try {
+            long todayStart = getStartOfDay();
+            long currentTime = System.currentTimeMillis();
+            long wallClockTimeElapsed = (currentTime - todayStart) / (60 * 1000); // minutes since start of day
+            
+            long actualUsageMinutes = getTodayUsageMinutes();
+            long dailyLimit = getCachedDailyLimit();
+            
+            Log.d(TAG, "========== TIMING ACCURACY DEBUG ==========");
+            Log.d(TAG, String.format("⏰ Wall clock time since start of day: %d minutes", wallClockTimeElapsed));
+            Log.d(TAG, String.format("📱 Actual app usage time tracked: %d minutes", actualUsageMinutes));
+            Log.d(TAG, String.format("🎯 Daily limit: %d minutes", dailyLimit));
+            Log.d(TAG, String.format("⚖️ Usage accuracy ratio: %.2f%% (lower = more idle time)", 
+                    wallClockTimeElapsed > 0 ? (actualUsageMinutes * 100.0f) / wallClockTimeElapsed : 0));
+            Log.d(TAG, String.format("📊 Progress: %.1f%% of daily limit used", 
+                    dailyLimit > 0 ? (actualUsageMinutes * 100.0f) / dailyLimit : 0));
+            Log.d(TAG, "============================================");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error in timing accuracy debug", e);
+        }
     }
 }

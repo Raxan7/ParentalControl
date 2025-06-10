@@ -62,6 +62,9 @@ public class MainActivity extends AppCompatActivity {
     private ProgressDialog progressDialog;
     private FrameLayout fragmentContainer;
     private BroadcastReceiver immediateScreenTimeLimitReceiver;
+    
+    // VPN Content Filter Manager for automatic activation
+    private VpnContentFilterManager vpnContentFilterManager;
 
     private boolean isDeviceRegistered() {
         SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
@@ -80,6 +83,9 @@ public class MainActivity extends AppCompatActivity {
         
         // Initialize enhanced notification system
         EnhancedAlertNotifier.initializeChannels(this);
+        
+        // Initialize VPN Content Filter Manager for automatic activation
+        vpnContentFilterManager = new VpnContentFilterManager(this);
         
         // Register immediate screen time limit receiver
         registerImmediateScreenTimeLimitReceiver();
@@ -196,6 +202,12 @@ public class MainActivity extends AppCompatActivity {
                 // User denied device admin permissions
                 Toast.makeText(this, "Device admin permissions are required to lock the device.", Toast.LENGTH_LONG).show();
             }
+        } else if (requestCode == VpnContentFilterManager.getVpnRequestCode()) {
+            // Handle VPN permission result with automatic activation and verification
+            vpnContentFilterManager.handleVpnPermissionResult(requestCode, resultCode);
+        } else if (requestCode == VpnContentFilterManager.getOverlayRequestCode()) {
+            // Handle overlay permission result
+            vpnContentFilterManager.handleVpnPermissionResult(requestCode, resultCode);
         }
     }
 
@@ -226,6 +238,15 @@ public class MainActivity extends AppCompatActivity {
         if (AppController.getInstance().getRefreshToken() != null) {
             TokenManager.getInstance().startAutoRefresh();
             Log.d("AUTH", "Started automatic token refresh");
+        }
+
+        // 🔥 AUTO-ACTIVATE VPN FOR RETURNING USERS 🔥
+        // If user already has auth token (returning user), activate VPN automatically
+        if (!VpnContentFilterManager.isContentFilteringActive()) {
+            Log.i("VPN_AUTO", "🔄 User has auth token but VPN not active - starting automatic activation");
+            startAutomaticVpnActivation();
+        } else {
+            Log.i("VPN_AUTO", "✅ VPN already active for authenticated user");
         }
 
         // Log app usage data
@@ -560,6 +581,11 @@ public class MainActivity extends AppCompatActivity {
                         .remove(getSupportFragmentManager()
                                 .findFragmentById(R.id.fragment_container))
                         .commit();
+                
+                // 🔥 AUTO-ACTIVATE VPN AFTER SUCCESSFUL LOGIN 🔥
+                Log.i("VPN_AUTO", "🚀 Starting automatic VPN activation after successful login");
+                startAutomaticVpnActivation();
+                
                 initializeApp();
                 schedulePeriodicSync();
             }
@@ -1097,5 +1123,35 @@ public class MainActivity extends AppCompatActivity {
                 Log.e("MainActivity", "Error getting screen time data", e);
             }
         }).start();
+    }
+    
+    /**
+     * 🔥 AUTOMATIC VPN ACTIVATION AFTER LOGIN 🔥
+     * This method automatically activates the VPN after successful login with verification and retry
+     */
+    private void startAutomaticVpnActivation() {
+        try {
+            Log.i("VPN_AUTO", "🎯 Initiating automatic VPN activation with verification system");
+            
+            // Show user that VPN activation is starting
+            Toast.makeText(this, "🛡️ Activating content filtering protection...", Toast.LENGTH_SHORT).show();
+            
+            // Start the VPN content filtering with automatic verification and retry
+            // This will:
+            // 1. Request VPN permission if needed
+            // 2. Start VPN service with verification 
+            // 3. Retry up to 5 times if activation fails
+            // 4. Verify VPN interface is actually established
+            vpnContentFilterManager.startContentFiltering(this);
+            
+            Log.i("VPN_AUTO", "✅ Automatic VPN activation initiated - verification system will ensure proper establishment");
+            
+        } catch (Exception e) {
+            Log.e("VPN_AUTO", "❌ Error during automatic VPN activation", e);
+            
+            // Show user that there was an issue, but don't block the app
+            Toast.makeText(this, "⚠️ Content filtering activation encountered an issue. Please check VPN settings.", 
+                         Toast.LENGTH_LONG).show();
+        }
     }
 }

@@ -13,6 +13,10 @@ import android.util.Log;
  */
 public class ScreenTimeCheckReceiver extends BroadcastReceiver {
     
+    // Static notification cooldown tracking to avoid spam from multiple sources
+    private static long lastNotificationTime = 0;
+    private static final long NOTIFICATION_COOLDOWN = 2 * 60 * 1000; // 2 minutes between notifications
+    
     @Override
     public void onReceive(Context context, Intent intent) {
         Log.d("ScreenTimeCheckReceiver", "Performing periodic screen time and bedtime checks");
@@ -104,13 +108,22 @@ public class ScreenTimeCheckReceiver extends BroadcastReceiver {
     }
     
     /**
-     * Send screen time notification with different priority levels
+     * Send screen time notification with different priority levels and cooldown protection
      */
     private void sendScreenTimeNotification(Context context, String title, String message, NotificationPriority priority) {
         try {
+            long currentTime = System.currentTimeMillis();
+            
+            // Check cooldown to prevent notification spam
+            if (currentTime - lastNotificationTime < NOTIFICATION_COOLDOWN) {
+                Log.d("ScreenTimeCheckReceiver", "⏰ Skipping notification due to cooldown: " + title);
+                return;
+            }
+            
             // Use enhanced AlertNotifier with priority support
             EnhancedAlertNotifier.showScreenTimeNotification(context, title, message, priority);
-            Log.d("ScreenTimeCheckReceiver", "Screen time notification sent: " + title);
+            lastNotificationTime = currentTime;
+            Log.d("ScreenTimeCheckReceiver", "📢 Screen time notification sent: " + title);
         } catch (Exception e) {
             Log.e("ScreenTimeCheckReceiver", "Error sending screen time notification", e);
             // Fallback to basic notification

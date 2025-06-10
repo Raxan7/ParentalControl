@@ -36,6 +36,24 @@ public class ScreenTimeCountdownService extends Service {
     private ScreenTimeCalculator screenTimeCalculator;
     private NotificationManager notificationManager;
     private long lastRuleCheckTime = 0;
+    
+    // Notification cooldown tracking for better UX
+    private long last30MinWarningTime = 0;
+    private long last15MinWarningTime = 0;
+    private long last5MinWarningTime = 0;
+    private long last1MinWarningTime = 0;
+    private long lastLimitReachedTime = 0;
+    
+    // Cooldown intervals (in milliseconds)
+    private static final long WARNING_COOLDOWN_30MIN = 10 * 60 * 1000; // 10 minutes
+    private static final long WARNING_COOLDOWN_15MIN = 5 * 60 * 1000;  // 5 minutes
+    private static final long WARNING_COOLDOWN_5MIN = 2 * 60 * 1000;   // 2 minutes
+    private static final long WARNING_COOLDOWN_1MIN = 30 * 1000;       // 30 seconds
+    private static final long WARNING_COOLDOWN_LIMIT = 10 * 1000;      // 10 seconds
+    
+    // User-friendly notification throttling
+    private long lastWarningNotificationTime = 0;
+    private int lastNotifiedRemainingMinutes = -1; // Track the last notified remaining time
 
     @Override
     public void onCreate() {
@@ -206,6 +224,8 @@ public class ScreenTimeCountdownService extends Service {
             
             if (data.wasUpdated) {
                 Log.d(TAG, "Screen time rules were updated: " + data.toString());
+                // Reset notification cooldowns so user gets fresh warnings with new limits
+                resetNotificationCooldowns();
             }
             
         } catch (Exception e) {
@@ -214,57 +234,83 @@ public class ScreenTimeCountdownService extends Service {
     }
     
     /**
-     * Send progressive warning notifications based on remaining time
+     * Send progressive warning notifications based on remaining time with cooldown for better UX
      */
     private void sendProgressiveWarningNotifications(ScreenTimeCalculator.ScreenTimeCountdownData data) {
         try {
             long remainingMinutes = data.remainingMinutes;
+            long currentTime = System.currentTimeMillis();
             
             // Only send notifications if we're getting close to the limit
             if (remainingMinutes > 30) {
                 return; // No notifications needed yet
             }
             
-            ScreenTimeCheckReceiver.NotificationPriority priority;
-            String title;
-            String message;
+            ScreenTimeCheckReceiver.NotificationPriority priority = ScreenTimeCheckReceiver.NotificationPriority.LOW;
+            String title = "";
+            String message = "";
+            boolean shouldSendNotification = false;
             
             if (remainingMinutes <= 0) {
                 // Critical - limit reached - IMMEDIATE LOCKDOWN
-                priority = ScreenTimeCheckReceiver.NotificationPriority.CRITICAL;
-                title = "Screen Time Limit Reached!";
-                message = "Your daily screen time limit of " + data.dailyLimitMinutes + " minutes has been reached. Device will lock NOW.";
+                if (currentTime - lastLimitReachedTime >= WARNING_COOLDOWN_LIMIT) {
+                    priority = ScreenTimeCheckReceiver.NotificationPriority.CRITICAL;
+                    title = "Screen Time Limit Reached!";
+                    message = "Your daily screen time limit of " + data.dailyLimitMinutes + " minutes has been reached. Device will lock NOW.";
+                    shouldSendNotification = true;
+                    lastLimitReachedTime = currentTime;
+                }
                 
             } else if (remainingMinutes == 1) {
                 // CRITICAL WARNING - exactly 1 minute before lockdown
-                priority = ScreenTimeCheckReceiver.NotificationPriority.CRITICAL;
-                title = "🚨 FINAL WARNING - 1 MINUTE LEFT";
-                message = "Your device will LOCK in exactly 1 minute when your " + data.dailyLimitMinutes + " minute daily limit is reached!";
+                if (currentTime - last1MinWarningTime >= WARNING_COOLDOWN_1MIN) {
+                    priority = ScreenTimeCheckReceiver.NotificationPriority.CRITICAL;
+                    title = "🚨 FINAL WARNING - 1 MINUTE LEFT";
+                    message = "Your device will LOCK in exactly 1 minute when your " + data.dailyLimitMinutes + " minute daily limit is reached!";
+                    shouldSendNotification = true;
+                    last1MinWarningTime = currentTime;
+                }
                 
             } else if (remainingMinutes <= 5) {
                 // High priority - 5 minutes or less
-                priority = ScreenTimeCheckReceiver.NotificationPriority.HIGH;
-                title = "Screen Time Critical - " + remainingMinutes + " min left";
-                message = "Only " + remainingMinutes + " minutes remaining! Device will lock when limit is reached.";
+                if (currentTime - last5MinWarningTime >= WARNING_COOLDOWN_5MIN) {
+                    priority = ScreenTimeCheckReceiver.NotificationPriority.HIGH;
+                    title = "Screen Time Critical - " + remainingMinutes + " min left";
+                    message = "Only " + remainingMinutes + " minutes remaining! Device will lock when limit is reached.";
+                    shouldSendNotification = true;
+                    last5MinWarningTime = currentTime;
+                }
                 
             } else if (remainingMinutes <= 15) {
                 // Normal priority - 15 minutes or less
-                priority = ScreenTimeCheckReceiver.NotificationPriority.NORMAL;
-                title = "Screen Time Warning - " + remainingMinutes + " min left";
-                message = "You have " + remainingMinutes + " minutes of screen time remaining today.";
+                if (currentTime - last15MinWarningTime >= WARNING_COOLDOWN_15MIN) {
+                    priority = ScreenTimeCheckReceiver.NotificationPriority.NORMAL;
+                    title = "Screen Time Warning - " + remainingMinutes + " min left";
+                    message = "You have " + remainingMinutes + " minutes of screen time remaining today.";
+                    shouldSendNotification = true;
+                    last15MinWarningTime = currentTime;
+                }
                 
             } else if (remainingMinutes <= 30) {
                 // Low priority - 30 minutes or less
-                priority = ScreenTimeCheckReceiver.NotificationPriority.LOW;
-                title = "Screen Time Reminder";
-                message = "You have " + remainingMinutes + " minutes remaining of your daily " + data.dailyLimitMinutes + " minute limit.";
-                
+                if (currentTime - last30MinWarningTime >= WARNING_COOLDOWN_30MIN) {
+                    priority = ScreenTimeCheckReceiver.NotificationPriority.LOW;
+                    title = "Screen Time Reminder";
+                    message = "You have " + remainingMinutes + " minutes remaining of your daily " + data.dailyLimitMinutes + " minute limit.";
+                    shouldSendNotification = true;
+                    last30MinWarningTime = currentTime;
+                }
             } else {
                 return; // No notification needed
             }
             
-            // Send the notification
-            EnhancedAlertNotifier.showScreenTimeNotification(this, title, message, priority);
+            // Only send the notification if cooldown period has passed
+            if (shouldSendNotification) {
+                EnhancedAlertNotifier.showScreenTimeNotification(this, title, message, priority);
+                Log.d(TAG, String.format("📢 Sent warning notification: %s (remaining: %d min)", title, remainingMinutes));
+            } else {
+                Log.d(TAG, String.format("⏰ Skipped notification due to cooldown (remaining: %d min)", remainingMinutes));
+            }
             
         } catch (Exception e) {
             Log.e(TAG, "Error sending progressive warning notifications", e);
@@ -343,6 +389,18 @@ public class ScreenTimeCountdownService extends Service {
         }
         
         return limit;
+    }
+
+    /**
+     * Reset notification cooldowns for fresh notifications after rule updates
+     */
+    private void resetNotificationCooldowns() {
+        last30MinWarningTime = 0;
+        last15MinWarningTime = 0;
+        last5MinWarningTime = 0;
+        last1MinWarningTime = 0;
+        lastLimitReachedTime = 0;
+        Log.d(TAG, "🔄 Notification cooldowns reset - fresh warnings will be sent");
     }
 
     @Override
