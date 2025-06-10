@@ -114,7 +114,7 @@ public class ScreenTimeCountdownService extends Service {
     
     /**
      * Get adaptive update interval based on remaining screen time
-     * Updates more frequently when close to limits
+     * Updates more frequently when close to limits for immediate response
      */
     private long getAdaptiveUpdateInterval() {
         try {
@@ -122,16 +122,19 @@ public class ScreenTimeCountdownService extends Service {
             long remainingMinutes = data.remainingMinutes;
             
             if (remainingMinutes <= 0) {
-                // Limit reached - update every 500ms for immediate response
+                // Limit reached - update every 100ms for IMMEDIATE response
+                return 100;
+            } else if (remainingMinutes <= 1) {
+                // Critical zone (1 minute left) - update every 500ms for precision
                 return 500;
             } else if (remainingMinutes <= 5) {
-                // Critical zone - update every 1 second
+                // Warning zone - update every 1 second
                 return 1000;
             } else if (remainingMinutes <= 15) {
-                // Warning zone - update every 2 seconds
+                // Caution zone - update every 2 seconds
                 return 2000;
             } else if (remainingMinutes <= 30) {
-                // Caution zone - update every 5 seconds
+                // Watch zone - update every 5 seconds
                 return 5000;
             } else {
                 // Normal zone - update every 10 seconds
@@ -149,12 +152,20 @@ public class ScreenTimeCountdownService extends Service {
      */
     private void updateCountdownDisplay() {
         try {
-            // Get countdown data (uses cached values for stability)
+            // Get countdown data (uses actual usage only for accurate timing)
             ScreenTimeCalculator.ScreenTimeCountdownData data = screenTimeCalculator.getCountdownData();
             
-            // Check for immediate limit exceeded condition
+            // Check for immediate limit exceeded condition - CRITICAL PATH
             if (data.isLimitExceeded()) {
-                Log.d(TAG, "🚨 IMMEDIATE LIMIT DETECTION: Screen time limit exceeded during countdown update");
+                Log.d(TAG, "🚨 IMMEDIATE LIMIT DETECTION: Screen time limit exceeded - TRIGGERING IMMEDIATE LOCKDOWN");
+                
+                // Send critical notification IMMEDIATELY
+                EnhancedAlertNotifier.showScreenTimeNotification(
+                    this,
+                    "🚨 SCREEN TIME LIMIT REACHED",
+                    "Your " + data.dailyLimitMinutes + " minute daily limit has been reached. Device locking NOW.",
+                    ScreenTimeCheckReceiver.NotificationPriority.CRITICAL
+                );
                 
                 // Send immediate broadcast to trigger lock
                 Intent lockBroadcast = new Intent();
@@ -163,9 +174,11 @@ public class ScreenTimeCountdownService extends Service {
                 lockBroadcast.putExtra("limit_minutes", (int) data.dailyLimitMinutes);
                 sendBroadcast(lockBroadcast);
                 
-                // Trigger immediate screen time check
+                // Trigger immediate screen time check with HIGHEST PRIORITY
                 ScreenTimeManager screenTimeManager = new ScreenTimeManager(this);
                 screenTimeManager.checkScreenTime(this);
+                
+                Log.d(TAG, "🔒 LOCKDOWN INITIATED - Used: " + data.usedMinutes + "/" + data.dailyLimitMinutes + " minutes");
             }
             
             // Update notification with current status
@@ -182,6 +195,14 @@ public class ScreenTimeCountdownService extends Service {
             
             // Send warning notifications based on remaining time
             sendProgressiveWarningNotifications(data);
+            
+            // Debug timing accuracy every 30 seconds when close to limit
+            if (data.remainingMinutes <= 30) {
+                long currentTime = System.currentTimeMillis();
+                if (currentTime - lastRuleCheckTime >= 30000) { // Every 30 seconds
+                    screenTimeCalculator.debugTimingAccuracy();
+                }
+            }
             
             if (data.wasUpdated) {
                 Log.d(TAG, "Screen time rules were updated: " + data.toString());
@@ -209,10 +230,16 @@ public class ScreenTimeCountdownService extends Service {
             String message;
             
             if (remainingMinutes <= 0) {
-                // Critical - limit reached
+                // Critical - limit reached - IMMEDIATE LOCKDOWN
                 priority = ScreenTimeCheckReceiver.NotificationPriority.CRITICAL;
                 title = "Screen Time Limit Reached!";
-                message = "Your daily screen time limit of " + data.dailyLimitMinutes + " minutes has been reached. Device will lock now.";
+                message = "Your daily screen time limit of " + data.dailyLimitMinutes + " minutes has been reached. Device will lock NOW.";
+                
+            } else if (remainingMinutes == 1) {
+                // CRITICAL WARNING - exactly 1 minute before lockdown
+                priority = ScreenTimeCheckReceiver.NotificationPriority.CRITICAL;
+                title = "🚨 FINAL WARNING - 1 MINUTE LEFT";
+                message = "Your device will LOCK in exactly 1 minute when your " + data.dailyLimitMinutes + " minute daily limit is reached!";
                 
             } else if (remainingMinutes <= 5) {
                 // High priority - 5 minutes or less

@@ -48,7 +48,7 @@ public class ActivityTrackerService extends Service {
             @Override
             public void run() {
                 trackForegroundApp();
-                handler.postDelayed(this, 3000); // Check every 3 seconds for more responsive tracking
+                handler.postDelayed(this, 1000); // Check every 1 second for more accurate tracking
             }
         };
     }
@@ -187,11 +187,11 @@ public class ActivityTrackerService extends Service {
             long currentTime = System.currentTimeMillis();
             long sessionDuration = currentTime - currentAppStartTime;
             
-            // If session has been running for more than 5 minutes, save intermediate progress
-            if (sessionDuration > 5 * 60 * 1000) {
+            // Save intermediate progress every 30 seconds to avoid losing data
+            if (sessionDuration > 30 * 1000) {
                 repository.saveAppUsage(currentForegroundApp, currentAppStartTime, currentTime);
                 Log.d(TAG, "Saved intermediate session for " + currentForegroundApp + 
-                      ": " + sessionDuration + "ms");
+                      ": " + sessionDuration + "ms (auto-save)");
                 
                 // Reset start time to continue tracking
                 currentAppStartTime = currentTime;

@@ -333,29 +333,18 @@ public class ScreenTimeCalculator {
     }
 
     /**
-     * Get remaining time based on continuous countdown from when rule was set/updated
-     * This provides a stable countdown that doesn't reset every query
+     * Get remaining time based on actual usage only (no wall-clock countdown)
+     * This provides accurate countdown based on real app usage time
      */
     public long getRemainingTimeMinutesFromCountdown(long dailyLimitMinutes) {
-        long countdownStartTime = prefs.getLong(KEY_COUNTDOWN_START_TIME, System.currentTimeMillis());
-        long currentTime = System.currentTimeMillis();
-        long elapsedMinutes = (currentTime - countdownStartTime) / (60 * 1000);
-        
-        // Also get actual usage to ensure countdown isn't more generous than reality
+        // Only use actual usage for countdown - this fixes the timing discrepancy issue
         long actualUsedMinutes = getTodayUsageMinutes();
         long actualRemainingMinutes = Math.max(0, dailyLimitMinutes - actualUsedMinutes);
         
-        long countdownRemainingMinutes = Math.max(0, dailyLimitMinutes - elapsedMinutes);
+        Log.d(TAG, String.format("Accurate countdown calculation - Used: %d min, Limit: %d min, Remaining: %d min", 
+              actualUsedMinutes, dailyLimitMinutes, actualRemainingMinutes));
         
-        // Use the more conservative (lower) remaining time
-        long finalRemainingMinutes = Math.min(countdownRemainingMinutes, actualRemainingMinutes);
-        
-        Log.d(TAG, String.format("Countdown calculation - Start: %d, Current: %d, Elapsed: %d min", 
-              countdownStartTime, currentTime, elapsedMinutes));
-        Log.d(TAG, String.format("Countdown remaining: %d min, Actual remaining: %d min, Final: %d min", 
-              countdownRemainingMinutes, actualRemainingMinutes, finalRemainingMinutes));
-        
-        return finalRemainingMinutes;
+        return actualRemainingMinutes;
     }
 
     /**
@@ -367,25 +356,45 @@ public class ScreenTimeCalculator {
 
     /**
      * Get screen time data optimized for countdown display
-     * Uses cached values and countdown-based remaining time for stability
+     * Uses actual usage time only for accurate countdown (fixes timing discrepancy)
      */
     public ScreenTimeCountdownData getCountdownData() {
         // Check if rules were updated first
         boolean wasUpdated = checkAndUpdateRulesIfChanged();
         
         long dailyLimitMinutes = getCachedDailyLimit();
-        long usedMinutes = getTodayUsageMinutes(); // Still need actual usage
-        long remainingMinutesCountdown = getRemainingTimeMinutesFromCountdown(dailyLimitMinutes);
-        long remainingMinutesActual = Math.max(0, dailyLimitMinutes - usedMinutes);
-        
-        // Use the more conservative (lower) of the two remaining times
-        // This prevents the countdown from being more generous than actual usage
-        long remainingMinutes = Math.min(remainingMinutesCountdown, remainingMinutesActual);
+        long usedMinutes = getTodayUsageMinutes(); // Actual usage
+        long remainingMinutes = Math.max(0, dailyLimitMinutes - usedMinutes); // Only use actual usage
         
         float percentageUsed = (dailyLimitMinutes > 0) ? 
                 (usedMinutes * 100f) / dailyLimitMinutes : 0f;
         
+        Log.d(TAG, String.format("Accurate countdown data - Used: %d min, Remaining: %d min, Limit: %d min, %.1f%%", 
+                usedMinutes, remainingMinutes, dailyLimitMinutes, percentageUsed));
+        
         return new ScreenTimeCountdownData(dailyLimitMinutes, usedMinutes, remainingMinutes, 
                                           percentageUsed, wasUpdated);
+    }
+
+    /**
+     * Debug method to compare wall-clock time vs actual usage tracking
+     * Helps identify timing discrepancies
+     */
+    public void debugTimingAccuracy() {
+        long todayStart = getStartOfDay();
+        long currentTime = System.currentTimeMillis();
+        long wallClockMinutesSinceStartOfDay = (currentTime - todayStart) / (60 * 1000);
+        long actualUsageMinutes = getTodayUsageMinutes();
+        
+        float usagePercentageOfWallClock = wallClockMinutesSinceStartOfDay > 0 ? 
+            (actualUsageMinutes * 100f / wallClockMinutesSinceStartOfDay) : 0f;
+        
+        Log.d(TAG, "=== TIMING ACCURACY DEBUG ===");
+        Log.d(TAG, String.format("Wall-clock time since start of day: %d minutes", wallClockMinutesSinceStartOfDay));
+        Log.d(TAG, String.format("Actual tracked usage: %d minutes", actualUsageMinutes));
+        Log.d(TAG, String.format("Usage efficiency: %.1f%% (actual vs wall-clock)", usagePercentageOfWallClock));
+        Log.d(TAG, String.format("Time ratio: 1 minute tracked = %.2f minutes real time", 
+            wallClockMinutesSinceStartOfDay > 0 ? (wallClockMinutesSinceStartOfDay / (float)actualUsageMinutes) : 0f));
+        Log.d(TAG, "=== END TIMING DEBUG ===");
     }
 }
