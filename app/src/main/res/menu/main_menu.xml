@@ -11,12 +11,12 @@
         android:title="Reset Screen Time Limit"
         android:orderInCategory="50"
         app:showAsAction="never" />
-    <!-- <item
+    <item
         android:id="@+id/menu_diagnostics"
         android:title="Blocking Diagnostics"
         android:orderInCategory="100"
-        app:showAsAction="never" /> -->
-    <!-- <item
+        app:showAsAction="never" />
+    <item
         android:id="@+id/menu_vpn_test"
         android:title="VPN Content Filter Test"
         android:orderInCategory="110"
@@ -30,5 +30,5 @@
         android:id="@+id/menu_test_web_rule_update"
         android:title="Test Web Interface Rule Update"
         android:orderInCategory="130"
-        app:showAsAction="never" /> -->
+        app:showAsAction="never" />
 </menu>
