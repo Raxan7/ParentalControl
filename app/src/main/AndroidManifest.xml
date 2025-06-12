@@ -127,6 +127,11 @@
             android:stopWithTask="false" />
 
         <service
+            android:name=".BrowserRedirectService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <service
             android:name=".ScreenTimeCountdownService"
             android:enabled="true"
             android:exported="false"

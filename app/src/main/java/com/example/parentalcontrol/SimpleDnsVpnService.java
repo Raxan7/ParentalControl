@@ -1,9 +1,11 @@
 package com.example.parentalcontrol;
 
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Build;
@@ -19,6 +21,8 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.Calendar;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -42,6 +46,13 @@ public class SimpleDnsVpnService extends VpnService {
     private static final long DIAGNOSTIC_INTERVAL = 60000; // Run diagnostics every 60 seconds
     private long lastDiagnosticRun = 0;
     private int consecutiveFailures = 0;
+    
+    // Redirect control - prevent infinite loops and unnecessary redirects
+    private static final long REDIRECT_COOLDOWN = 5000; // 5 seconds cooldown between redirects
+    private static final String GOOGLE_DOMAIN = "google.com";
+    private static final String GOOGLE_WWW = "www.google.com";
+    private long lastRedirectTime = 0;
+    private String lastRedirectedDomain = null;
     
     @Override
     public void onCreate() {
@@ -217,28 +228,67 @@ public class SimpleDnsVpnService extends VpnService {
             
             Log.d(TAG, "[handleDnsQuery] DNS query for: " + domain);
             if (domain != null) {
+                // CRITICAL FIX: Prevent infinite redirect loop - never redirect Google.com itself
+                if (isGoogleDomain(domain)) {
+                    Log.d(TAG, "[handleDnsQuery] ✅ Allowing Google.com - no redirect needed: " + domain);
+                    // Forward Google.com queries normally - no blocking
+                    long startTime = System.currentTimeMillis();
+                    byte[] dnsResponse = forwardDnsQueryAndGetResponse(packet);
+                    
+                    VpnDebugAuditor.auditDnsForwardingPerformance(domain, startTime, dnsResponse != null);
+                    VpnDebugAuditor.auditDnsResponse(domain, dnsResponse, false);
+                    
+                    if (dnsResponse != null) {
+                        out.write(dnsResponse);
+                        out.flush();
+                        trackSuccess("DNS forward response for Google.com: " + domain);
+                        Log.d(TAG, "[handleDnsQuery] ✅ Google.com DNS response sent: " + domain);
+                    }
+                    return;
+                }
+                
                 boolean shouldBlock = filterEngine.shouldBlockDomain(domain);
                 
                 if (shouldBlock) {
+                    // CRITICAL FIX: Check if browser is active and apply cooldown
+                    if (!shouldPerformRedirect(domain)) {
+                        Log.d(TAG, "[handleDnsQuery] 🚫 Skipping redirect (browser inactive or cooldown): " + domain);
+                        // Just block without redirect - return NXDOMAIN or no response
+                        return;
+                    }
                     // AUDIT POINT 4: Track filtering decision
                     VpnDebugAuditor.auditFilteringDecision(domain, true, "Domain blocked by filter engine");
                     
-                    Log.i(TAG, "[handleDnsQuery] BLOCKING DNS query for: " + domain);
-                    byte[] blockedResponse = createBlockedDnsResponse(packet);
+                    // Enhanced logging for debugging
+                    Log.i(TAG, "🚫🔄 [IMMEDIATE_REDIRECT] Blocking and redirecting DNS query for: " + domain);
+                    Log.d(TAG, "[IMMEDIATE_REDIRECT] Creating DNS response to redirect " + domain + " → Google.com");
+                    
+                    // Create DNS response that points to Google.com IP
+                    byte[] blockedResponse = createGoogleRedirectDnsResponse(packet, domain);
                     
                     // AUDIT POINT 5: Validate blocked response
                     VpnDebugAuditor.auditDnsResponse(domain, blockedResponse, true);
                     
                     if (blockedResponse != null) {
+                        // Send DNS response first
                         out.write(blockedResponse);
                         out.flush();
-                        showBlockedNotification(domain);
-                        trackSuccess("DNS block response for " + domain);
-                        Log.d(TAG, "[handleDnsQuery] Blocked response sent for: " + domain);
+                        
+                        // Log the successful DNS redirect
+                        Log.i(TAG, "✅ [IMMEDIATE_REDIRECT] DNS response sent: " + domain + " → Google.com (172.217.12.142)");
+                        
+                        // Also trigger immediate browser redirect as backup
+                        triggerImmediateBrowserRedirect(domain);
+                        
+                        // Show notification with redirect info
+                        showRedirectNotification(domain);
+                        
+                        trackSuccess("DNS redirect response for " + domain + " → Google.com");
+                        Log.d(TAG, "[IMMEDIATE_REDIRECT] ✅ Complete redirect chain executed for: " + domain);
                         return;
                     } else {
-                        trackFailure("Failed to create blocked DNS response for " + domain);
-                        Log.e(TAG, "[handleDnsQuery] Failed to create blocked DNS response for: " + domain);
+                        trackFailure("Failed to create redirect DNS response for " + domain);
+                        Log.e(TAG, "[IMMEDIATE_REDIRECT] ❌ Failed to create redirect DNS response for: " + domain);
                     }
                 }
             }
@@ -346,7 +396,12 @@ public class SimpleDnsVpnService extends VpnService {
         }
     }
     
-    private byte[] createBlockedDnsResponse(ByteBuffer originalPacket) {
+    /**
+     * Create DNS response that redirects blocked domain to Google.com
+     * This makes the browser immediately navigate to Google.com instead of showing an error
+     */
+    private byte[] createGoogleRedirectDnsResponse(ByteBuffer originalPacket, String domain) {
+        Log.d(TAG, "[createGoogleRedirectDnsResponse] Creating redirect response: " + domain + " → Google.com");
         try {
             byte[] original = originalPacket.array();
             int offset = originalPacket.position();
@@ -370,7 +425,7 @@ public class SimpleDnsVpnService extends VpnService {
             response[dnsHeaderStart + 6] = 0;
             response[dnsHeaderStart + 7] = 1;
             
-            // Add answer section pointing to 127.0.0.1
+            // Add answer section pointing to Google.com IP address
             int answerStart = length;
             
             // Name pointer (points to question)
@@ -385,21 +440,24 @@ public class SimpleDnsVpnService extends VpnService {
             response[answerStart + 4] = 0;
             response[answerStart + 5] = 1;
             
-            // TTL (300 seconds)
+            // TTL (60 seconds - short TTL for immediate effect)
             response[answerStart + 6] = 0;
             response[answerStart + 7] = 0;
-            response[answerStart + 8] = 1;
-            response[answerStart + 9] = 44;
+            response[answerStart + 8] = 0;
+            response[answerStart + 9] = 60;
             
             // Data length (4 bytes for IPv4)
             response[answerStart + 10] = 0;
             response[answerStart + 11] = 4;
             
-            // IP address: 127.0.0.1
-            response[answerStart + 12] = 127;
-            response[answerStart + 13] = 0;
-            response[answerStart + 14] = 0;
-            response[answerStart + 15] = 1;
+            // CRITICAL: Google.com IP address (172.217.12.142) - this forces immediate redirect
+            // This is a real Google.com IP that will cause browser to navigate to Google
+            response[answerStart + 12] = (byte) 172;  // 172
+            response[answerStart + 13] = (byte) 217;  // 217  
+            response[answerStart + 14] = (byte) 12;   // 12
+            response[answerStart + 15] = (byte) 142;  // 142
+            
+            Log.d(TAG, "[createGoogleRedirectDnsResponse] ✅ DNS response created with Google IP: 172.217.12.142");
             
             // Update IP packet length
             int newLength = length + 16;
@@ -579,6 +637,301 @@ public class SimpleDnsVpnService extends VpnService {
         }
         int result = ~sum & 0xFFFF;
         return result == 0 ? 0xFFFF : result;
+    }
+    
+    /**
+     * Show notification about the redirect to Google.com
+     */
+    private void showRedirectNotification(String domain) {
+        try {
+            NotificationManager notificationManager = 
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            
+            if (notificationManager != null) {
+                Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setContentTitle("🔄 Redirected to Google")
+                    .setContentText("Blocked " + domain + " → Redirected to Google.com")
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .build();
+                
+                notificationManager.notify((int) System.currentTimeMillis(), notification);
+                Log.d(TAG, "[showRedirectNotification] ✅ Notification shown for redirect: " + domain);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "[showRedirectNotification] Error showing redirect notification", e);
+        }
+    }
+    
+    /**
+     * Check if the domain is Google.com (prevent infinite redirect loop)
+     */
+    private boolean isGoogleDomain(String domain) {
+        if (domain == null) return false;
+        String lowerDomain = domain.toLowerCase();
+        return lowerDomain.equals(GOOGLE_DOMAIN) || 
+               lowerDomain.equals(GOOGLE_WWW) || 
+               lowerDomain.endsWith("." + GOOGLE_DOMAIN);
+    }
+    
+    /**
+     * Check if we should perform a redirect (browser active + cooldown)
+     */
+    private boolean shouldPerformRedirect(String domain) {
+        long currentTime = System.currentTimeMillis();
+        
+        // Check cooldown period - but use shorter cooldown if browser detection is uncertain
+        long effectiveCooldown = isBrowserDetectionReliable() ? REDIRECT_COOLDOWN : REDIRECT_COOLDOWN / 2;
+        
+        if (currentTime - lastRedirectTime < effectiveCooldown) {
+            Log.d(TAG, "[shouldPerformRedirect] ⏰ Redirect cooldown active (" + effectiveCooldown + "ms), skipping: " + domain);
+            return false;
+        }
+        
+        // Check if same domain was just redirected
+        if (domain.equals(lastRedirectedDomain) && 
+            currentTime - lastRedirectTime < REDIRECT_COOLDOWN * 2) {
+            Log.d(TAG, "[shouldPerformRedirect] 🔄 Same domain recently redirected, skipping: " + domain);
+            return false;
+        }
+        
+        // Check if browser is active (with fallback for detection issues)
+        boolean browserActive = isBrowserActive();
+        if (!browserActive) {
+            // If browser detection fails but we suspect it might be wrong, allow redirects during peak usage times
+            boolean allowFallback = shouldAllowFallbackRedirect();
+            if (!allowFallback) {
+                Log.d(TAG, "[shouldPerformRedirect] 📱 Browser not active and no fallback conditions met, skipping redirect: " + domain);
+                return false;
+            } else {
+                Log.d(TAG, "[shouldPerformRedirect] 📱 Browser detection uncertain, allowing redirect with fallback: " + domain);
+            }
+        }
+        
+        Log.d(TAG, "[shouldPerformRedirect] ✅ Redirect approved for: " + domain + " (browser active: " + browserActive + ")");
+        return true;
+    }
+    
+    /**
+     * Check if browser detection methods are reliable on this device
+     */
+    private boolean isBrowserDetectionReliable() {
+        // On newer Android versions, detection is less reliable
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q; // Android 10+
+    }
+    
+    /**
+     * Fallback conditions when browser detection is uncertain
+     */
+    private boolean shouldAllowFallbackRedirect() {
+        // Allow redirects during common browsing hours (6 AM to 11 PM)
+        java.util.Calendar calendar = java.util.Calendar.getInstance();
+        int hour = calendar.get(java.util.Calendar.HOUR_OF_DAY);
+        boolean isDuringBrowsingHours = hour >= 6 && hour <= 23;
+        
+        // Allow if it's been a while since last redirect (user might have opened browser)
+        long timeSinceLastRedirect = System.currentTimeMillis() - lastRedirectTime;
+        boolean hasBeenQuietForAWhile = timeSinceLastRedirect > 30000; // 30 seconds
+        
+        boolean allowFallback = isDuringBrowsingHours && hasBeenQuietForAWhile;
+        
+        if (allowFallback) {
+            Log.d(TAG, "[shouldAllowFallbackRedirect] Allowing fallback redirect - browsing hours: " + isDuringBrowsingHours + ", quiet period: " + hasBeenQuietForAWhile);
+        }
+        
+        return allowFallback;
+    }
+    
+    /**
+     * Check if a browser app is currently in the foreground using multiple detection methods
+     */
+    private boolean isBrowserActive() {
+        // Method 1: Try modern UsageStatsManager (API 21+)
+        boolean browserActiveMethod1 = isBrowserActiveViaUsageStats();
+        
+        // Method 2: Try legacy getRunningTasks (fallback)
+        boolean browserActiveMethod2 = isBrowserActiveViaRunningTasks();
+        
+        // Method 3: Check running processes for browser apps
+        boolean browserActiveMethod3 = isBrowserActiveViaRunningProcesses();
+        
+        // Method 4: Always assume browser is active during redirect window (fallback)
+        boolean browserActiveMethod4 = isWithinRecentRedirectWindow();
+        
+        boolean finalResult = browserActiveMethod1 || browserActiveMethod2 || browserActiveMethod3 || browserActiveMethod4;
+        
+        Log.d(TAG, String.format("[isBrowserActive] Detection methods - UsageStats: %s, RunningTasks: %s, Processes: %s, RecentWindow: %s → Final: %s", 
+                browserActiveMethod1, browserActiveMethod2, browserActiveMethod3, browserActiveMethod4, finalResult));
+        
+        return finalResult;
+    }
+    
+    /**
+     * Method 1: Check browser activity using UsageStatsManager (most reliable on modern Android)
+     */
+    private boolean isBrowserActiveViaUsageStats() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+                return false; // UsageStatsManager not available
+            }
+            
+            // Note: This requires PACKAGE_USAGE_STATS permission which is hard to get
+            // For now, we'll implement a simpler approach
+            return false;
+            
+        } catch (Exception e) {
+            Log.w(TAG, "[isBrowserActiveViaUsageStats] Error", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Method 2: Legacy method using getRunningTasks (deprecated but sometimes works)
+     */
+    private boolean isBrowserActiveViaRunningTasks() {
+        try {
+            ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (activityManager == null) return false;
+            
+            // Get running tasks (deprecated but still available)
+            List<ActivityManager.RunningTaskInfo> runningTasks = activityManager.getRunningTasks(1);
+            if (runningTasks.isEmpty()) return false;
+            
+            String topActivity = runningTasks.get(0).topActivity.getPackageName();
+            
+            // Check if it's a browser app
+            boolean isBrowser = isBrowserPackage(topActivity);
+            
+            Log.d(TAG, "[isBrowserActiveViaRunningTasks] Top app: " + topActivity + ", is browser: " + isBrowser);
+            return isBrowser;
+            
+        } catch (Exception e) {
+            Log.w(TAG, "[isBrowserActiveViaRunningTasks] Error", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Method 3: Check running processes for browser applications
+     */
+    private boolean isBrowserActiveViaRunningProcesses() {
+        try {
+            ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (activityManager == null) return false;
+            
+            List<ActivityManager.RunningAppProcessInfo> runningProcesses = activityManager.getRunningAppProcesses();
+            if (runningProcesses == null) return false;
+            
+            for (ActivityManager.RunningAppProcessInfo processInfo : runningProcesses) {
+                // Check if process is in foreground and is a browser
+                if (processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                    processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
+                    
+                    for (String processName : processInfo.pkgList) {
+                        if (isBrowserPackage(processName)) {
+                            Log.d(TAG, "[isBrowserActiveViaRunningProcesses] Found active browser process: " + processName);
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            return false;
+            
+        } catch (Exception e) {
+            Log.w(TAG, "[isBrowserActiveViaRunningProcesses] Error", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Method 4: Assume browser is active if we're within a recent redirect window
+     * This prevents blocking redirects when browser detection fails
+     */
+    private boolean isWithinRecentRedirectWindow() {
+        long currentTime = System.currentTimeMillis();
+        long timeSinceLastRedirect = currentTime - lastRedirectTime;
+        
+        // If a redirect happened in the last 10 seconds, assume browser might still be active
+        boolean withinWindow = timeSinceLastRedirect < 10000; // 10 seconds
+        
+        if (withinWindow) {
+            Log.d(TAG, "[isWithinRecentRedirectWindow] Within recent redirect window (" + timeSinceLastRedirect + "ms ago)");
+        }
+        
+        return withinWindow;
+    }
+    
+    /**
+     * Check if a package name corresponds to a browser application
+     */
+    private boolean isBrowserPackage(String packageName) {
+        if (packageName == null) return false;
+        
+        String lowerPackage = packageName.toLowerCase();
+        
+        // Common browser package patterns
+        return lowerPackage.contains("chrome") ||
+               lowerPackage.contains("firefox") ||
+               lowerPackage.contains("browser") ||
+               lowerPackage.contains("opera") ||
+               lowerPackage.contains("edge") ||
+               lowerPackage.contains("samsung") ||
+               lowerPackage.contains("webview") ||
+               lowerPackage.contains("brave") ||
+               lowerPackage.contains("vivaldi") ||
+               lowerPackage.contains("dolphin") ||
+               lowerPackage.contains("uc.browser") ||
+               lowerPackage.contains("duckduckgo") ||
+               // Specific package names
+               lowerPackage.equals("com.android.browser") ||
+               lowerPackage.equals("com.google.android.apps.chrome") ||
+               lowerPackage.equals("org.mozilla.firefox") ||
+               lowerPackage.equals("com.opera.browser") ||
+               lowerPackage.equals("com.microsoft.emmx") ||
+               lowerPackage.equals("com.sec.android.app.sbrowser");
+    }
+
+    /**
+     * Trigger immediate browser redirect as backup mechanism
+     * This ensures that even if DNS redirect doesn't work, browser still goes to Google
+     */
+    private void triggerImmediateBrowserRedirect(String domain) {
+        try {
+            Log.i(TAG, "[triggerImmediateBrowserRedirect] 🚀 Triggering immediate browser redirect for: " + domain);
+            
+            // Update redirect tracking
+            lastRedirectTime = System.currentTimeMillis();
+            lastRedirectedDomain = domain;
+            
+            // Method 1: Direct Intent to Google.com
+            Intent googleIntent = new Intent(Intent.ACTION_VIEW);
+            googleIntent.setData(android.net.Uri.parse("https://www.google.com"));
+            googleIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            
+            try {
+                startActivity(googleIntent);
+                Log.i(TAG, "[triggerImmediateBrowserRedirect] ✅ Intent to Google.com launched successfully");
+            } catch (Exception e) {
+                Log.w(TAG, "[triggerImmediateBrowserRedirect] Intent method failed, trying alternative", e);
+            }
+            
+            // Method 2: Start a blocking overlay service as backup
+            Intent overlayIntent = new Intent(this, BrowserRedirectService.class);
+            overlayIntent.putExtra("blocked_domain", domain);
+            overlayIntent.putExtra("redirect_url", "https://www.google.com");
+            
+            try {
+                startService(overlayIntent);
+                Log.d(TAG, "[triggerImmediateBrowserRedirect] 🎯 Redirect service started as backup");
+            } catch (Exception e) {
+                Log.w(TAG, "[triggerImmediateBrowserRedirect] Backup service failed", e);
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "[triggerImmediateBrowserRedirect] ❌ Error triggering browser redirect", e);
+        }
     }
     
     private void showBlockedNotification(String domain) {
