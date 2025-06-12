@@ -25,9 +25,9 @@ public class BrowserRedirectService extends Service {
             String blockedDomain = intent.getStringExtra("blocked_domain");
             String redirectUrl = intent.getStringExtra("redirect_url");
             
-            // CRITICAL FIX: Check if it's Google.com - don't redirect Google to itself
-            if (isGoogleDomain(blockedDomain)) {
-                Log.d(TAG, "[BrowserRedirectService] ✅ Skipping redirect - domain is Google.com: " + blockedDomain);
+            // CRITICAL FIX: Check if it's Django server - don't redirect localhost to itself
+            if (isDjangoServerDomain(blockedDomain)) {
+                Log.d(TAG, "[BrowserRedirectService] ✅ Skipping redirect - domain is Django server: " + blockedDomain);
                 stopSelf();
                 return START_NOT_STICKY;
             }
@@ -57,14 +57,10 @@ public class BrowserRedirectService extends Service {
     }
     
     /**
-     * Check if the domain is Google.com (prevent infinite redirect loop)
+     * Check if the domain is Django server (prevent infinite redirect loop)
      */
-    private boolean isGoogleDomain(String domain) {
-        if (domain == null) return false;
-        String lowerDomain = domain.toLowerCase();
-        return lowerDomain.equals("google.com") || 
-               lowerDomain.equals("www.google.com") || 
-               lowerDomain.endsWith(".google.com");
+    private boolean isDjangoServerDomain(String domain) {
+        return DjangoServerConfig.isDjangoServerDomain(domain);
     }
     
     /**
@@ -185,9 +181,9 @@ public class BrowserRedirectService extends Service {
      */
     private void performImmediateRedirect(String blockedDomain, String redirectUrl) {
         try {
-            // Final safety check - never redirect if already on Google
-            if (isGoogleDomain(blockedDomain)) {
-                Log.d(TAG, "[performImmediateRedirect] ✅ Safety check: Not redirecting Google.com: " + blockedDomain);
+            // Final safety check - never redirect if already on Django server
+            if (isDjangoServerDomain(blockedDomain)) {
+                Log.d(TAG, "[performImmediateRedirect] ✅ Safety check: Not redirecting Django server: " + blockedDomain);
                 return;
             }
             

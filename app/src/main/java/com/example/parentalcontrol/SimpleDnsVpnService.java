@@ -49,8 +49,6 @@ public class SimpleDnsVpnService extends VpnService {
     
     // Redirect control - prevent infinite loops and unnecessary redirects
     private static final long REDIRECT_COOLDOWN = 5000; // 5 seconds cooldown between redirects
-    private static final String GOOGLE_DOMAIN = "google.com";
-    private static final String GOOGLE_WWW = "www.google.com";
     private long lastRedirectTime = 0;
     private String lastRedirectedDomain = null;
     
@@ -59,6 +57,12 @@ public class SimpleDnsVpnService extends VpnService {
         super.onCreate();
         Log.d(TAG, "SimpleDnsVpnService created");
         createNotificationChannel();
+        
+        // Log Django server configuration
+        Log.i(TAG, DjangoServerConfig.getConfigurationInfo());
+        if (!DjangoServerConfig.isConfigurationValid()) {
+            Log.e(TAG, "⚠️ Django server configuration is invalid!");
+        }
         
         filterEngine = new ContentFilterEngine(this);
         localWebServer = new LocalWebServer(this);
@@ -228,10 +232,10 @@ public class SimpleDnsVpnService extends VpnService {
             
             Log.d(TAG, "[handleDnsQuery] DNS query for: " + domain);
             if (domain != null) {
-                // CRITICAL FIX: Prevent infinite redirect loop - never redirect Google.com itself
-                if (isGoogleDomain(domain)) {
-                    Log.d(TAG, "[handleDnsQuery] ✅ Allowing Google.com - no redirect needed: " + domain);
-                    // Forward Google.com queries normally - no blocking
+                // CRITICAL FIX: Prevent infinite redirect loop - never redirect Django server itself
+                if (DjangoServerConfig.isDjangoServerDomain(domain)) {
+                    Log.d(TAG, "[handleDnsQuery] ✅ Allowing Django server - no redirect needed: " + domain);
+                    // Forward Django server queries normally - no blocking
                     long startTime = System.currentTimeMillis();
                     byte[] dnsResponse = forwardDnsQueryAndGetResponse(packet);
                     
@@ -241,8 +245,8 @@ public class SimpleDnsVpnService extends VpnService {
                     if (dnsResponse != null) {
                         out.write(dnsResponse);
                         out.flush();
-                        trackSuccess("DNS forward response for Google.com: " + domain);
-                        Log.d(TAG, "[handleDnsQuery] ✅ Google.com DNS response sent: " + domain);
+                        trackSuccess("DNS forward response for Django server: " + domain);
+                        Log.d(TAG, "[handleDnsQuery] ✅ Django server DNS response sent: " + domain);
                     }
                     return;
                 }
@@ -261,10 +265,10 @@ public class SimpleDnsVpnService extends VpnService {
                     
                     // Enhanced logging for debugging
                     Log.i(TAG, "🚫🔄 [IMMEDIATE_REDIRECT] Blocking and redirecting DNS query for: " + domain);
-                    Log.d(TAG, "[IMMEDIATE_REDIRECT] Creating DNS response to redirect " + domain + " → Google.com");
+                    Log.d(TAG, "[IMMEDIATE_REDIRECT] Creating DNS response to redirect " + domain + " → Django blocked page");
                     
-                    // Create DNS response that points to Google.com IP
-                    byte[] blockedResponse = createGoogleRedirectDnsResponse(packet, domain);
+                    // Create DNS response that points to Django server IP
+                    byte[] blockedResponse = createDjangoRedirectDnsResponse(packet, domain);
                     
                     // AUDIT POINT 5: Validate blocked response
                     VpnDebugAuditor.auditDnsResponse(domain, blockedResponse, true);
@@ -275,7 +279,7 @@ public class SimpleDnsVpnService extends VpnService {
                         out.flush();
                         
                         // Log the successful DNS redirect
-                        Log.i(TAG, "✅ [IMMEDIATE_REDIRECT] DNS response sent: " + domain + " → Google.com (172.217.12.142)");
+                        Log.i(TAG, "✅ [IMMEDIATE_REDIRECT] DNS response sent: " + domain + " → Django server (" + DjangoServerConfig.DJANGO_BASE_URL + ")");
                         
                         // Also trigger immediate browser redirect as backup
                         triggerImmediateBrowserRedirect(domain);
@@ -283,7 +287,7 @@ public class SimpleDnsVpnService extends VpnService {
                         // Show notification with redirect info
                         showRedirectNotification(domain);
                         
-                        trackSuccess("DNS redirect response for " + domain + " → Google.com");
+                        trackSuccess("DNS redirect response for " + domain + " → Django blocked page");
                         Log.d(TAG, "[IMMEDIATE_REDIRECT] ✅ Complete redirect chain executed for: " + domain);
                         return;
                     } else {
@@ -397,11 +401,11 @@ public class SimpleDnsVpnService extends VpnService {
     }
     
     /**
-     * Create DNS response that redirects blocked domain to Google.com
-     * This makes the browser immediately navigate to Google.com instead of showing an error
+     * Create DNS response that redirects blocked domain to Django blocked page
+     * This makes the browser immediately navigate to the Django server instead of showing an error
      */
-    private byte[] createGoogleRedirectDnsResponse(ByteBuffer originalPacket, String domain) {
-        Log.d(TAG, "[createGoogleRedirectDnsResponse] Creating redirect response: " + domain + " → Google.com");
+    private byte[] createDjangoRedirectDnsResponse(ByteBuffer originalPacket, String domain) {
+        Log.d(TAG, "[createDjangoRedirectDnsResponse] Creating redirect response: " + domain + " → Django server (127.0.0.1)");
         try {
             byte[] original = originalPacket.array();
             int offset = originalPacket.position();
@@ -450,14 +454,15 @@ public class SimpleDnsVpnService extends VpnService {
             response[answerStart + 10] = 0;
             response[answerStart + 11] = 4;
             
-            // CRITICAL: Google.com IP address (172.217.12.142) - this forces immediate redirect
-            // This is a real Google.com IP that will cause browser to navigate to Google
-            response[answerStart + 12] = (byte) 172;  // 172
-            response[answerStart + 13] = (byte) 217;  // 217  
-            response[answerStart + 14] = (byte) 12;   // 12
-            response[answerStart + 15] = (byte) 142;  // 142
+            // CRITICAL: Django server IP address - this forces redirect to local Django blocked page
+            // This will cause browser to navigate to the Django server's /blocked/ page
+            byte[] djangoIP = DjangoServerConfig.getDjangoServerIPBytes();
+            response[answerStart + 12] = djangoIP[0];
+            response[answerStart + 13] = djangoIP[1];
+            response[answerStart + 14] = djangoIP[2];
+            response[answerStart + 15] = djangoIP[3];
             
-            Log.d(TAG, "[createGoogleRedirectDnsResponse] ✅ DNS response created with Google IP: 172.217.12.142");
+            Log.d(TAG, "[createDjangoRedirectDnsResponse] ✅ DNS response created with Django server IP: " + DjangoServerConfig.DJANGO_DOMAIN);
             
             // Update IP packet length
             int newLength = length + 16;
@@ -640,7 +645,7 @@ public class SimpleDnsVpnService extends VpnService {
     }
     
     /**
-     * Show notification about the redirect to Google.com
+     * Show notification about the redirect to Django blocked page
      */
     private void showRedirectNotification(String domain) {
         try {
@@ -649,8 +654,8 @@ public class SimpleDnsVpnService extends VpnService {
             
             if (notificationManager != null) {
                 Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                    .setContentTitle("🔄 Redirected to Google")
-                    .setContentText("Blocked " + domain + " → Redirected to Google.com")
+                    .setContentTitle("🚫 Content Blocked")
+                    .setContentText("Blocked " + domain + " → Redirected to blocked page")
                     .setSmallIcon(android.R.drawable.ic_dialog_info)
                     .setAutoCancel(true)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -662,17 +667,6 @@ public class SimpleDnsVpnService extends VpnService {
         } catch (Exception e) {
             Log.e(TAG, "[showRedirectNotification] Error showing redirect notification", e);
         }
-    }
-    
-    /**
-     * Check if the domain is Google.com (prevent infinite redirect loop)
-     */
-    private boolean isGoogleDomain(String domain) {
-        if (domain == null) return false;
-        String lowerDomain = domain.toLowerCase();
-        return lowerDomain.equals(GOOGLE_DOMAIN) || 
-               lowerDomain.equals(GOOGLE_WWW) || 
-               lowerDomain.endsWith("." + GOOGLE_DOMAIN);
     }
     
     /**
@@ -895,7 +889,7 @@ public class SimpleDnsVpnService extends VpnService {
 
     /**
      * Trigger immediate browser redirect as backup mechanism
-     * This ensures that even if DNS redirect doesn't work, browser still goes to Google
+     * This ensures that even if DNS redirect doesn't work, browser still goes to Django blocked page
      */
     private void triggerImmediateBrowserRedirect(String domain) {
         try {
@@ -905,14 +899,15 @@ public class SimpleDnsVpnService extends VpnService {
             lastRedirectTime = System.currentTimeMillis();
             lastRedirectedDomain = domain;
             
-            // Method 1: Direct Intent to Google.com
-            Intent googleIntent = new Intent(Intent.ACTION_VIEW);
-            googleIntent.setData(android.net.Uri.parse("https://www.google.com"));
-            googleIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            // Method 1: Direct Intent to Django blocked page
+            String djangoBlockedUrl = DjangoServerConfig.BLOCKED_PAGE_URL;
+            Intent djangoIntent = new Intent(Intent.ACTION_VIEW);
+            djangoIntent.setData(android.net.Uri.parse(djangoBlockedUrl));
+            djangoIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             
             try {
-                startActivity(googleIntent);
-                Log.i(TAG, "[triggerImmediateBrowserRedirect] ✅ Intent to Google.com launched successfully");
+                startActivity(djangoIntent);
+                Log.i(TAG, "[triggerImmediateBrowserRedirect] ✅ Intent to Django blocked page launched successfully");
             } catch (Exception e) {
                 Log.w(TAG, "[triggerImmediateBrowserRedirect] Intent method failed, trying alternative", e);
             }
@@ -920,7 +915,7 @@ public class SimpleDnsVpnService extends VpnService {
             // Method 2: Start a blocking overlay service as backup
             Intent overlayIntent = new Intent(this, BrowserRedirectService.class);
             overlayIntent.putExtra("blocked_domain", domain);
-            overlayIntent.putExtra("redirect_url", "https://www.google.com");
+            overlayIntent.putExtra("redirect_url", djangoBlockedUrl);
             
             try {
                 startService(overlayIntent);
