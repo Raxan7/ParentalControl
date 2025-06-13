@@ -295,7 +295,9 @@ public class MainActivity extends AppCompatActivity {
                         // Continue with app initialization
                         ScreenTimeManager screenTimeManager = ServiceLocator.getInstance(MainActivity.this)
                                 .getScreenTimeManager(MainActivity.this);
-                        screenTimeManager.setDailyLimit(120);
+                        
+                        // Don't hardcode timer reset - let sync services handle screen time rules
+                        // screenTimeManager.setDailyLimit(120); // REMOVED - this was causing unwanted timer resets
                         
                         // Ensure bedtime enforcement is also set up independently
                         screenTimeManager.setupBedtimeEnforcement();
@@ -935,19 +937,19 @@ public class MainActivity extends AppCompatActivity {
     private void showCustomLimitDialog() {
         android.widget.EditText input = new android.widget.EditText(this);
         input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        input.setHint("Enter minutes (e.g., 90 for 1.5 hours)");
+        input.setHint("Enter minutes (e.g., 3 for 3-minute timer)");
         
         new androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Set Custom Screen Time Limit")
-            .setMessage("Enter the new daily limit in minutes:")
+            .setTitle("Set Timer-Based Screen Time Limit")
+            .setMessage("⏱️ TIMER MODE: Enter additional minutes to allow from now.\n\nExample: If current usage is 30 min and you enter 3, the limit will trigger at 33 minutes total usage.")
             .setView(input)
-            .setPositiveButton("Apply", (dialog, which) -> {
+            .setPositiveButton("Set Timer", (dialog, which) -> {
                 try {
                     String text = input.getText().toString().trim();
                     if (!text.isEmpty()) {
                         long minutes = Long.parseLong(text);
                         if (minutes > 0 && minutes <= 1440) { // Max 24 hours
-                            simulateWebRuleUpdate(minutes);
+                            setTimerBasedLimit(minutes);
                         } else {
                             Toast.makeText(this, "Please enter a value between 1 and 1440 minutes", Toast.LENGTH_LONG).show();
                         }
@@ -961,14 +963,67 @@ public class MainActivity extends AppCompatActivity {
     }
     
     /**
-     * Simulate a web interface rule update by directly updating the database
+     * Set timer-based screen time limit
      */
-    private void simulateWebRuleUpdate(long newLimitMinutes) {
-        showLoading("Simulating web interface rule update...");
+    private void setTimerBasedLimit(long minutes) {
+        showLoading("Setting timer-based limit...");
         
         new Thread(() -> {
             try {
-                Log.d("MainActivity", "🧪 Simulating web interface rule update to " + newLimitMinutes + " minutes");
+                Log.d("MainActivity", "🎯 Setting timer-based limit: " + minutes + " minutes");
+                
+                // Get current usage before setting timer
+                ScreenTimeCalculator calculator = new ScreenTimeCalculator(this);
+                long currentUsage = calculator.getTodayUsageMinutes();
+                
+                // Set timer-based limit
+                calculator.setTimerBasedLimit(minutes);
+                
+                runOnUiThread(() -> {
+                    hideLoading();
+                    String message = String.format(
+                        "🎯 Timer-Based Limit Set!\n\n" +
+                        "⏱️ Current usage: %d minutes\n" +
+                        "➕ Additional time: %d minutes\n" +
+                        "🎯 Will trigger at: %d minutes\n\n" +
+                        "Timer will count down from your current usage!",
+                        currentUsage, minutes, currentUsage + minutes
+                    );
+                    
+                    new androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("Timer Set Successfully")
+                        .setMessage(message)
+                        .setPositiveButton("OK", null)
+                        .show();
+                    
+                    // Refresh the screen time display
+                    refreshScreenTimeDisplay();
+                });
+                
+            } catch (Exception e) {
+                Log.e("MainActivity", "Error setting timer-based limit", e);
+                runOnUiThread(() -> {
+                    hideLoading();
+                    Toast.makeText(this, "Error setting timer: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+    
+    /**
+     * Simulate a web interface rule update by directly updating the database
+     * This will trigger timer-based limits when detected
+     */
+    private void simulateWebRuleUpdate(long newLimitMinutes) {
+        showLoading("Simulating timer-based limit from web interface...");
+        
+        new Thread(() -> {
+            try {
+                Log.d("MainActivity", "🧪 Simulating web interface timer-based rule update to " + newLimitMinutes + " minutes");
+                
+                // Get current usage first
+                ScreenTimeCalculator calculator = new ScreenTimeCalculator(this);
+                long currentUsage = calculator.getTodayUsageMinutes();
                 
                 // Get database helper
                 AppUsageDatabaseHelper dbHelper = ServiceLocator.getInstance(this).getDatabaseHelper();
@@ -979,7 +1034,7 @@ public class MainActivity extends AppCompatActivity {
                 String updateSql = "INSERT OR REPLACE INTO screen_time_rules (id, daily_limit_minutes, last_updated) VALUES (1, ?, ?)";
                 db.execSQL(updateSql, new Object[]{newLimitMinutes, currentTime});
                 
-                Log.d("MainActivity", "✅ Database updated with new rule: " + newLimitMinutes + " minutes, timestamp: " + currentTime);
+                Log.d("MainActivity", "✅ Database updated with new timer-based rule: " + newLimitMinutes + " minutes, timestamp: " + currentTime);
                 
                 // Wait a moment to ensure the change is registered
                 Thread.sleep(1000);
@@ -1002,10 +1057,11 @@ public class MainActivity extends AppCompatActivity {
                     }
                     
                     Toast.makeText(this, 
-                        "✅ Web interface rule update simulated!\n" +
-                        "New limit: " + timeText + "\n" +
-                        "Screen time countdown has been reset.\n" +
-                        "Check notifications for update confirmation.",
+                        "🎯 Timer-based limit set from web interface!\n" +
+                        "⏱️ Current usage: " + currentUsage + " minutes\n" +
+                        "➕ Additional time: " + timeText + "\n" +
+                        "🎯 Will trigger at: " + (currentUsage + newLimitMinutes) + " minutes\n" +
+                        "Check notifications for timer confirmation.",
                         Toast.LENGTH_LONG).show();
                         
                     // Show the current screen time data
@@ -1097,18 +1153,21 @@ public class MainActivity extends AppCompatActivity {
                 ScreenTimeCalculator.ScreenTimeCountdownData data = calculator.getCountdownData();
                 
                 runOnUiThread(() -> {
+                    String timerStatus = calculator.getTimerStatus();
                     String message = String.format(
                         "Current Screen Time Status:\n\n" +
                         "📊 Daily Limit: %d minutes\n" +
                         "⏱️ Used Today: %d minutes\n" +
                         "⏳ Remaining: %d minutes\n" +
                         "📈 Usage: %.1f%%\n" +
-                        "🔄 Rules Updated: %s",
+                        "🔄 Rules Updated: %s\n\n" +
+                        "Timer Status:\n%s",
                         data.dailyLimitMinutes,
                         data.usedMinutes,
                         data.remainingMinutes,
                         data.percentageUsed,
-                        data.wasUpdated ? "Yes" : "No"
+                        data.wasUpdated ? "Yes" : "No",
+                        timerStatus
                     );
                     
                     new androidx.appcompat.app.AlertDialog.Builder(this)
@@ -1121,6 +1180,29 @@ public class MainActivity extends AppCompatActivity {
                 
             } catch (Exception e) {
                 Log.e("MainActivity", "Error getting screen time data", e);
+            }
+        }).start();
+    }
+    
+    /**
+     * Clear timer for testing purposes
+     */
+    private void clearTimerForTesting() {
+        new Thread(() -> {
+            try {
+                ScreenTimeCalculator calculator = new ScreenTimeCalculator(this);
+                calculator.clearTimerLimit();
+                
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "🗑️ Timer cleared for testing", Toast.LENGTH_SHORT).show();
+                    showCurrentScreenTimeData(); // Refresh display
+                });
+                
+            } catch (Exception e) {
+                Log.e("MainActivity", "Error clearing timer", e);
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "Error clearing timer: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
             }
         }).start();
     }

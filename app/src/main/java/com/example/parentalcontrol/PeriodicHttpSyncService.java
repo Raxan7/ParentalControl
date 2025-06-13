@@ -10,6 +10,7 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.database.sqlite.SQLiteDatabase;
 import android.os.BatteryManager;
 import android.os.Build;
@@ -204,7 +205,7 @@ public class PeriodicHttpSyncService extends Service {
 
     private void syncScreenTimeRules(String deviceId, String authToken) {
         try {
-            Log.d(TAG, "🔗 Making HTTP request to sync screen time rules and bedtime data...");
+            Log.d(TAG, "🔗 Checking for unsynced screen time rules using sync flag approach...");
             
             OkHttpClient client = new OkHttpClient.Builder()
                     .connectTimeout(10, TimeUnit.SECONDS)
@@ -221,40 +222,65 @@ public class PeriodicHttpSyncService extends Service {
                 String responseBody = response.body().string();
                 Log.d(TAG, "✅ Screen time rules HTTP request successful: " + response.code());
                 
-                // Parse and save the response
+                // Parse the response
                 JSONObject json = new JSONObject(responseBody);
                 
-                // Initialize default daily limit
-                long dailyLimit = 120; // Default value
+                // Check if there are changes to sync
+                boolean hasChanges = json.optBoolean("has_changes", false);
                 
-                // Handle daily limit
-                if (json.has("daily_limit_minutes")) {
-                    dailyLimit = json.getLong("daily_limit_minutes");
-                    Log.d(TAG, "Updated daily screen time limit: " + dailyLimit + " minutes");
+                if (hasChanges) {
+                    // Server has unsynced changes
+                    long dailyLimit = json.getLong("daily_limit_minutes");
+                    String bedtimeStart = json.optString("bedtime_start", null);
+                    String bedtimeEnd = json.optString("bedtime_end", null);
                     
-                    // Save to shared preferences
-                    getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE)
-                            .edit()
-                            .putLong("daily_limit_minutes", dailyLimit)
-                            .apply();
-                }
-                
-                // Handle bedtime data
-                String bedtimeStart = json.optString("bedtime_start", null);
-                String bedtimeEnd = json.optString("bedtime_end", null);
-                
-                if (bedtimeStart != null && !bedtimeStart.equals("null") && !bedtimeStart.trim().isEmpty() &&
-                    bedtimeEnd != null && !bedtimeEnd.equals("null") && !bedtimeEnd.trim().isEmpty()) {
+                    Log.d(TAG, "🔄 Server has unsynced screen time changes - applying new rules");
+                    Log.d(TAG, String.format("   Daily limit: %d minutes", dailyLimit));
+                    Log.d(TAG, String.format("   Bedtime: %s to %s", bedtimeStart, bedtimeEnd));
                     
-                    Log.d(TAG, "Updated bedtime rules: " + bedtimeStart + " to " + bedtimeEnd);
+                    // Update shared preferences
+                    SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
+                    prefs.edit()
+                        .putLong("daily_limit_minutes", dailyLimit)
+                        .apply();
+
+                    // Update database with new rules
+                    AppUsageDatabaseHelper dbHelper = ServiceLocator.getInstance(this).getDatabaseHelper();
+                    android.database.sqlite.SQLiteDatabase db = dbHelper.getWritableDatabase();
                     
-                    // Save bedtime data to database
-                    saveBedtimeRulesToDatabase(dailyLimit, bedtimeStart, bedtimeEnd);
+                    android.content.ContentValues values = new android.content.ContentValues();
+                    values.put("daily_limit_minutes", dailyLimit);
+                    values.put("last_updated", System.currentTimeMillis()); // Mark as updated locally
+                    
+                    // Handle bedtime data
+                    if (bedtimeStart != null && !bedtimeStart.equals("null") && !bedtimeStart.trim().isEmpty() &&
+                        bedtimeEnd != null && !bedtimeEnd.equals("null") && !bedtimeEnd.trim().isEmpty()) {
+                        values.put("bedtime_start", bedtimeStart);
+                        values.put("bedtime_end", bedtimeEnd);
+                        Log.d(TAG, "   Applying bedtime rules: " + bedtimeStart + " to " + bedtimeEnd);
+                    } else {
+                        values.put("bedtime_start", (String) null);
+                        values.put("bedtime_end", (String) null);
+                        Log.d(TAG, "   Clearing bedtime rules");
+                    }
+                    
+                    int rowsUpdated = db.update("screen_time_rules", values, "id = ?", new String[]{"1"});
+                    if (rowsUpdated == 0) {
+                        // Insert if no rows exist
+                        values.put("id", 1);
+                        db.insert("screen_time_rules", null, values);
+                        Log.d(TAG, "📝 Inserted new screen time rule");
+                    } else {
+                        Log.d(TAG, "📝 Updated screen time rule");
+                    }
+                    db.close();
+                        
+                    // Apply timer-based limit (server already marked as synced)
+                    ScreenTimeManager screenTimeManager = new ScreenTimeManager(this);
+                    screenTimeManager.setTimerBasedLimit(dailyLimit);
+                    
                 } else {
-                    Log.d(TAG, "No bedtime rules found or bedtime rules are empty");
-                    
-                    // Save without bedtime data
-                    saveBedtimeRulesToDatabase(dailyLimit, null, null);
+                    Log.d(TAG, "✅ No unsynced screen time changes from server");
                 }
                 
             } else {
@@ -368,29 +394,5 @@ public class PeriodicHttpSyncService extends Service {
     /**
      * Save bedtime rules to local database for enforcement
      */
-    private void saveBedtimeRulesToDatabase(long dailyLimitMinutes, String bedtimeStart, String bedtimeEnd) {
-        try {
-            AppUsageDatabaseHelper dbHelper = ServiceLocator.getInstance(this).getDatabaseHelper();
-            SQLiteDatabase db = dbHelper.getWritableDatabase();
-            
-            // Insert new rule (the database helper should handle this)
-            ContentValues values = new ContentValues();
-            values.put("daily_limit_minutes", dailyLimitMinutes);
-            values.put("bedtime_start", bedtimeStart);
-            values.put("bedtime_end", bedtimeEnd);
-            values.put("last_updated", System.currentTimeMillis());
-            
-            long result = db.insert("screen_time_rules", null, values);
-            db.close();
-            
-            if (result != -1) {
-                Log.d(TAG, "✅ Bedtime rules saved to database successfully");
-            } else {
-                Log.w(TAG, "⚠️ Failed to save bedtime rules to database");
-            }
-            
-        } catch (Exception e) {
-            Log.e(TAG, "❌ Error saving bedtime rules to database", e);
-        }
-    }
+    // saveBedtimeRulesToDatabase method removed - bedtime handling now done in main sync logic
 }

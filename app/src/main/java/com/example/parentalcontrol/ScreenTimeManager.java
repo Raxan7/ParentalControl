@@ -54,20 +54,26 @@ public class ScreenTimeManager {
     }
 
     /**
-     * Sets a screen time limit in minutes
-     *
-     * @param maxMinutes Maximum allowed screen time in minutes
+     * Sets a timer-based screen time limit in minutes
+     * This creates a timer that starts from current usage and adds maxMinutes
+     * ONLY call this when rules have actually changed
+     * @param maxMinutes Additional minutes to allow from current usage
      */
-    public void setDailyLimit(long maxMinutes) {
-        Log.d("ScreenTimeManager", "Setting daily limit to: " + maxMinutes + " minutes");
+    public void setTimerBasedLimit(long maxMinutes) {
+        Log.d("ScreenTimeManager", "Setting NEW timer-based limit to: " + maxMinutes + " minutes");
+        
+        // Use timer-based approach via ScreenTimeCalculator
+        ScreenTimeCalculator calculator = new ScreenTimeCalculator(context);
+        calculator.setTimerBasedLimit(maxMinutes);
         
         SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
         prefs.edit().putLong("daily_limit_minutes", maxMinutes).apply();
 
-        // Save to local database
-        screenTimeRepo.saveScreenTimeRules(maxMinutes);
+        // CRITICAL FIX: Do NOT call saveScreenTimeRules here - it would overwrite server timestamp
+        // The database should already be updated by sync services with proper server timestamp
+        // screenTimeRepo.saveScreenTimeRules(maxMinutes); // REMOVED - this was overwriting server timestamp
 
-        // Set repeating alarm for periodic checks (for testing, every minute)
+        // Set repeating alarm for periodic checks
         Intent intent = new Intent(context, ScreenTimeCheckReceiver.class);
         PendingIntent pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -84,13 +90,39 @@ public class ScreenTimeManager {
                 pendingIntent
         );
 
-        Log.d("ScreenTimeManager", "Daily limit set successfully. Alarm scheduled for periodic checks.");
+        Log.d("ScreenTimeManager", "Timer-based limit set successfully. Timer will run for " + maxMinutes + " minutes from current usage.");
 
         // Set up bedtime enforcement as well
         setupBedtimeEnforcement();
 
         // Sync rules with backend
         syncScreenTimeRules(maxMinutes);
+    }
+
+    /**
+     * Updates daily limit in preferences without setting a new timer
+     * Use this for regular sync operations where rules haven't changed
+     * @param maxMinutes The daily limit in minutes
+     */
+    public void updateDailyLimitPreference(long maxMinutes) {
+        Log.d("ScreenTimeManager", "Updating daily limit preference to: " + maxMinutes + " minutes (no timer reset, no database update)");
+        
+        SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
+        prefs.edit().putLong("daily_limit_minutes", maxMinutes).apply();
+        
+        // CRITICAL FIX: Do NOT update database here - this would change last_updated timestamp
+        // The database should only be updated when server rules actually change
+        // screenTimeRepo.saveScreenTimeRules(maxMinutes); // REMOVED - this was causing false change detection
+    }
+
+    /**
+     * Legacy method - now delegates to setTimerBasedLimit for backward compatibility
+     * @deprecated Use setTimerBasedLimit() for new timer-based limits or updateDailyLimitPreference() for updates
+     */
+    @Deprecated
+    public void setDailyLimit(long maxMinutes) {
+        Log.w("ScreenTimeManager", "⚠️ DEPRECATED setDailyLimit called - use setTimerBasedLimit() for new limits");
+        setTimerBasedLimit(maxMinutes);
     }
 
     private void syncScreenTimeRules(long maxMinutes) {
@@ -171,23 +203,16 @@ public class ScreenTimeManager {
     }
 
     /**
-     * Resets the screen time countdown with a new limit from web interface
+     * Resets the screen time limit with a new timer-based limit from web interface
      * This method is called when rule changes are detected from the web interface
-     * Unlike resetScreenTimeLimit(), this doesn't clear usage data, only resets the countdown
+     * Sets up a new timer from current usage
      */
     public void resetScreenTimeLimitWithNewLimit(long newLimitMinutes) {
-        Log.d("ScreenTimeManager", "Resetting screen time countdown with new limit from web interface: " + newLimitMinutes + " minutes");
+        Log.d("ScreenTimeManager", "Setting new timer-based limit from web interface: " + newLimitMinutes + " minutes");
         
         try {
-            // Update the daily limit in the repository and SharedPreferences
-            SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
-            prefs.edit()
-                .putLong("daily_limit_minutes", newLimitMinutes)
-                .remove("last_screen_time_check") // Reset check timestamps
-                .apply();
-            
-            // Save to local database (this will also reset countdown timing)
-            screenTimeRepo.saveScreenTimeRules(newLimitMinutes);
+            // Set up new timer-based limit (this will handle the timer setup)
+            setTimerBasedLimit(newLimitMinutes);
             
             // Reset the lock flag to allow new checks with updated limit
             lockInProgress = false;
@@ -233,8 +258,8 @@ public class ScreenTimeManager {
     private static boolean lockInProgress = false;
     
     /**
-     * Enhanced screen time check with improved synchronization and web interface rule updates
-     * This method now performs more frequent checks and better handles timing issues
+     * Enhanced screen time check with timer-based approach support
+     * This method now checks timer-based limits first, then falls back to traditional approach
      */
     public void checkScreenTime(Context context) {
         // Use the new calculator for more accurate calculation
@@ -243,75 +268,77 @@ public class ScreenTimeManager {
         // Check for rule updates from web interface FIRST
         ScreenTimeCalculator.ScreenTimeCountdownData countdownData = calculator.getCountdownData();
         if (countdownData.wasUpdated) {
-            Log.d("ScreenTimeManager", "🔄 Web interface rule update detected - resetting countdown with new limit: " + countdownData.dailyLimitMinutes + " minutes");
+            Log.d("ScreenTimeManager", "🔄 Web interface rule update detected - setting timer-based limit: " + countdownData.dailyLimitMinutes + " minutes");
+            // Timer is already set in the calculator, just reset other components
             resetScreenTimeLimitWithNewLimit(countdownData.dailyLimitMinutes);
         }
         
-        long dailyLimitMinutes = countdownData.dailyLimitMinutes; // Use the updated limit
-        
         // Enhanced debugging
-        Log.d("ScreenTimeManager", "=== ENHANCED SCREEN TIME CHECK START ===");
-        Log.d("ScreenTimeManager", "Daily limit from calculator: " + dailyLimitMinutes + " minutes");
+        Log.d("ScreenTimeManager", "=== ENHANCED TIMER-BASED SCREEN TIME CHECK START ===");
         
-        // Also check SharedPreferences for comparison
-        SharedPreferences prefs = context.getSharedPreferences("ParentalControlPrefs", Context.MODE_PRIVATE);
-        long sharedPrefLimit = prefs.getLong("daily_limit_minutes", 120);
-        Log.d("ScreenTimeManager", "Daily limit from SharedPrefs: " + sharedPrefLimit + " minutes");
+        // Check timer-based limit first
+        boolean timerLimitExceeded = calculator.isTimerLimitExceeded();
+        long timerRemaining = calculator.getTimerRemainingMinutes();
         
-        // Get actual usage data for synchronization check
-        long actualUsage = calculator.getTodayUsageMinutes();
-        long countdownUsage = countdownData.usedMinutes;
-        
-        Log.d("ScreenTimeManager", String.format("Usage comparison - Actual: %d min, Countdown: %d min, Remaining: %d min", 
-                actualUsage, countdownUsage, countdownData.remainingMinutes));
-        
-        // Check for synchronization issues
-        long usageDifference = Math.abs(actualUsage - countdownUsage);
-        if (usageDifference > 2) { // More than 2 minutes difference
-            Log.w("ScreenTimeManager", String.format("⚠️ SYNC WARNING: Usage difference detected - Actual: %d, Countdown: %d (diff: %d)", 
-                    actualUsage, countdownUsage, usageDifference));
-        }
-        
-        // Use the more conservative (higher) usage value for limit checking
-        long finalUsage = Math.max(actualUsage, countdownUsage);
-        boolean limitExceeded = finalUsage >= dailyLimitMinutes;
-        
-        Log.d("ScreenTimeManager", String.format("Final usage: %d min, Limit: %d min, Exceeded: %s", 
-                finalUsage, dailyLimitMinutes, limitExceeded));
-
-        if (limitExceeded) {
-            // Prevent multiple simultaneous lock attempts
-            if (!lockInProgress) {
-                lockInProgress = true;
-                Log.d("ScreenTimeManager", "🚨 Daily limit exceeded - triggering device lock (Usage: " + finalUsage + "min, Limit: " + dailyLimitMinutes + "min)");
-                
-                // Clear any existing screen time notifications
-                EnhancedAlertNotifier.clearScreenTimeNotifications(context);
-                
-                // Trigger device lock
-                Intent intent = new Intent(context, LockDeviceReceiver.class);
-                intent.putExtra("lock_reason", "screen_time");
-                context.sendBroadcast(intent);
-                
-                // Reset lock flag after a delay to prevent spam
-                new android.os.Handler().postDelayed(() -> {
-                    lockInProgress = false;
-                    Log.d("ScreenTimeManager", "Lock flag reset - ready for new checks");
-                }, 30000); // 30 seconds
-            } else {
-                Log.d("ScreenTimeManager", "Lock already in progress, skipping");
+        if (timerRemaining >= 0) {
+            // Timer is active
+            Log.d("ScreenTimeManager", String.format("🎯 Timer-based check - Remaining: %d min, Exceeded: %s", 
+                    timerRemaining, timerLimitExceeded));
+            
+            if (timerLimitExceeded) {
+                triggerDeviceLock(context, "Timer-based screen time limit reached");
+                return;
             }
         } else {
-            ScreenTimeCalculator.ScreenTimeData data = calculator.getScreenTimeData(dailyLimitMinutes);
-            Log.d("ScreenTimeManager", "✅ Screen time within limits: " + data.toString());
+            // Fallback to traditional approach
+            Log.d("ScreenTimeManager", "📊 Fallback to traditional limit checking");
             
-            // Reset lock flag if we're back within limits (shouldn't happen normally)
-            if (lockInProgress) {
-                lockInProgress = false;
-                Log.d("ScreenTimeManager", "Lock flag reset - usage is back within limits");
+            long dailyLimitMinutes = countdownData.dailyLimitMinutes;
+            long actualUsage = calculator.getTodayUsageMinutes();
+            boolean traditionalLimitExceeded = actualUsage >= dailyLimitMinutes;
+            
+            Log.d("ScreenTimeManager", String.format("Traditional check - Usage: %d min, Limit: %d min, Exceeded: %s", 
+                    actualUsage, dailyLimitMinutes, traditionalLimitExceeded));
+            
+            if (traditionalLimitExceeded) {
+                triggerDeviceLock(context, "Daily screen time limit exceeded");
+                return;
             }
         }
-        Log.d("ScreenTimeManager", "=== ENHANCED SCREEN TIME CHECK END ===");
+        
+        Log.d("ScreenTimeManager", "✅ Screen time within limits");
+        // Reset lock flag if we're back within limits
+        if (lockInProgress) {
+            lockInProgress = false;
+            Log.d("ScreenTimeManager", "Lock flag reset - usage is back within limits");
+        }
+        Log.d("ScreenTimeManager", "=== ENHANCED TIMER-BASED SCREEN TIME CHECK END ===");
+    }
+    
+    /**
+     * Helper method to trigger device lock with reason
+     */
+    private void triggerDeviceLock(Context context, String reason) {
+        if (!lockInProgress) {
+            lockInProgress = true;
+            Log.d("ScreenTimeManager", "🚨 " + reason + " - triggering device lock");
+            
+            // Clear any existing screen time notifications
+            EnhancedAlertNotifier.clearScreenTimeNotifications(context);
+            
+            // Trigger device lock
+            Intent intent = new Intent(context, LockDeviceReceiver.class);
+            intent.putExtra("lock_reason", "screen_time");
+            context.sendBroadcast(intent);
+            
+            // Reset lock flag after a delay to prevent spam
+            new android.os.Handler().postDelayed(() -> {
+                lockInProgress = false;
+                Log.d("ScreenTimeManager", "Lock flag reset - ready for new checks");
+            }, 30000); // 30 seconds
+        } else {
+            Log.d("ScreenTimeManager", "Lock already in progress, skipping");
+        }
     }
 
     /**

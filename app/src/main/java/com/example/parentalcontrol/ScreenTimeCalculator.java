@@ -16,6 +16,10 @@ public class ScreenTimeCalculator {
     private static final String KEY_LAST_UPDATED = "last_updated_timestamp";
     private static final String KEY_COUNTDOWN_START_TIME = "countdown_start_time";
     private static final String KEY_DAILY_LIMIT = "cached_daily_limit";
+    // New keys for timer-based approach
+    private static final String KEY_TIMER_TARGET_MINUTES = "timer_target_minutes";
+    private static final String KEY_TIMER_START_USAGE = "timer_start_usage";
+    private static final String KEY_TIMER_ACTIVE = "timer_active";
     
     private final AppUsageDatabaseHelper dbHelper;
     private final Context context;
@@ -28,58 +32,103 @@ public class ScreenTimeCalculator {
     }
 
     /**
-     * Check if screen time rules have been updated and refresh countdown if needed
-     * @return true if rules were updated and countdown was reset
+     * Set up a timer-based screen time limit
+     * This creates a timer that starts from current usage and adds limitMinutes
+     * @param limitMinutes the additional minutes to allow from now
      */
-    public boolean checkAndUpdateRulesIfChanged() {
-        SQLiteDatabase db = dbHelper.getReadableDatabase();
-        Cursor cursor = null;
-        boolean wasUpdated = false;
+    public void setTimerBasedLimit(long limitMinutes) {
+        long currentUsage = getTodayUsageMinutes();
+        long targetUsage = currentUsage + limitMinutes;
+        long currentTime = System.currentTimeMillis();
         
-        try {
-            cursor = db.rawQuery(
-                "SELECT daily_limit_minutes, last_updated FROM screen_time_rules ORDER BY last_updated DESC LIMIT 1",
-                null
-            );
-            
-            if (cursor.moveToFirst()) {
-                int dailyLimitMinutes = cursor.getInt(0);
-                long lastUpdated = cursor.getLong(1);
-                
-                // Get cached last_updated timestamp
-                long cachedLastUpdated = prefs.getLong(KEY_LAST_UPDATED, 0);
-                
-                // Check if the server data has actually changed
-                if (lastUpdated != cachedLastUpdated) {
-                    Log.d(TAG, String.format("🔄 Screen time rule update detected from web interface!"));
-                    Log.d(TAG, String.format("   Previous timestamp: %d (%s)", cachedLastUpdated, 
-                          cachedLastUpdated > 0 ? new java.util.Date(cachedLastUpdated).toString() : "Never"));
-                    Log.d(TAG, String.format("   New timestamp: %d (%s)", lastUpdated, new java.util.Date(lastUpdated).toString()));
-                    Log.d(TAG, String.format("   New daily limit: %d minutes", dailyLimitMinutes));
-                    
-                    // Reset the countdown start time since we have new rules
-                    long currentTime = System.currentTimeMillis();
-                    
-                    SharedPreferences.Editor editor = prefs.edit();
-                    editor.putLong(KEY_LAST_UPDATED, lastUpdated);
-                    editor.putLong(KEY_COUNTDOWN_START_TIME, currentTime);
-                    editor.putInt(KEY_DAILY_LIMIT, dailyLimitMinutes);
-                    editor.apply();
-                    
-                    Log.d(TAG, "✅ Screen time countdown reset due to web interface update. New limit: " + dailyLimitMinutes + " minutes");
-                    wasUpdated = true;
-                } else {
-                    Log.d(TAG, "No change in screen time rules, keeping existing countdown");
-                }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error checking screen time rule updates", e);
-        } finally {
-            if (cursor != null) cursor.close();
-            db.close();
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.putLong(KEY_TIMER_TARGET_MINUTES, targetUsage);
+        editor.putLong(KEY_TIMER_START_USAGE, currentUsage);
+        editor.putLong(KEY_COUNTDOWN_START_TIME, currentTime);
+        editor.putBoolean(KEY_TIMER_ACTIVE, true);
+        editor.putLong(KEY_LAST_UPDATED, currentTime);
+        editor.apply();
+        
+        Log.d(TAG, String.format("🎯 Timer-based limit set: Current usage=%d min, Additional=%d min, Target=%d min", 
+                currentUsage, limitMinutes, targetUsage));
+    }
+
+    /**
+     * Check if timer-based limit is active and has been exceeded
+     */
+    public boolean isTimerLimitExceeded() {
+        boolean timerActive = prefs.getBoolean(KEY_TIMER_ACTIVE, false);
+        if (!timerActive) {
+            return false;
         }
         
-        return wasUpdated;
+        long targetUsage = prefs.getLong(KEY_TIMER_TARGET_MINUTES, 0);
+        long currentUsage = getTodayUsageMinutes();
+        
+        return currentUsage >= targetUsage;
+    }
+
+    /**
+     * Get remaining time for timer-based limit
+     */
+    public long getTimerRemainingMinutes() {
+        boolean timerActive = prefs.getBoolean(KEY_TIMER_ACTIVE, false);
+        if (!timerActive) {
+            return -1; // No timer active
+        }
+        
+        long targetUsage = prefs.getLong(KEY_TIMER_TARGET_MINUTES, 0);
+        long currentUsage = getTodayUsageMinutes();
+        
+        return Math.max(0, targetUsage - currentUsage);
+    }
+
+    /**
+     * Get detailed timer status for debugging
+     */
+    public String getTimerStatus() {
+        boolean timerActive = prefs.getBoolean(KEY_TIMER_ACTIVE, false);
+        if (!timerActive) {
+            return "❌ No timer active";
+        }
+        
+        long targetUsage = prefs.getLong(KEY_TIMER_TARGET_MINUTES, 0);
+        long startUsage = prefs.getLong(KEY_TIMER_START_USAGE, 0);
+        long currentUsage = getTodayUsageMinutes();
+        long remaining = Math.max(0, targetUsage - currentUsage);
+        
+        return String.format("🎯 Timer Active - Start: %dm, Current: %dm, Target: %dm, Remaining: %dm", 
+                startUsage, currentUsage, targetUsage, remaining);
+    }
+
+    /**
+     * Clear timer-based limit
+     */
+    public void clearTimerLimit() {
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.putBoolean(KEY_TIMER_ACTIVE, false);
+        editor.remove(KEY_TIMER_TARGET_MINUTES);
+        editor.remove(KEY_TIMER_START_USAGE);
+        editor.apply();
+        
+        Log.d(TAG, "🔄 Timer-based limit cleared");
+    }
+
+    /**
+     * Simple rule check - change detection now handled by server-side sync flags
+     * This method only checks if local database has valid rules
+     * @return false - change detection moved to server-side sync flag approach
+     */
+    public boolean checkAndUpdateRulesIfChanged() {
+        // SERVER-SIDE SYNC FLAG APPROACH:
+        // Change detection is now handled entirely by the server using sync flags.
+        // The sync services (PeriodicHttpSyncService and DataSyncService) handle
+        // applying rule changes when the server indicates there are unsynced updates.
+        // This eliminates complex client-side timestamp comparison that was causing
+        // unwanted timer resets.
+        
+        Log.d(TAG, "📊 Rule change detection now handled by server-side sync flags");
+        return false; // Never trigger timer resets from this method
     }
     public long getTodayUsageMinutes() {
         long todayStart = getStartOfDay();
@@ -356,21 +405,34 @@ public class ScreenTimeCalculator {
 
     /**
      * Get screen time data optimized for countdown display
-     * Uses actual usage time only for accurate countdown (fixes timing discrepancy)
+     * Now supports both timer-based and traditional limit approaches
      */
     public ScreenTimeCountdownData getCountdownData() {
-        // Check if rules were updated first
-        boolean wasUpdated = checkAndUpdateRulesIfChanged();
+        // SIMPLIFIED: Don't check for rule changes here, let sync services handle that
+        // This prevents conflicts between ScreenTimeCalculator and sync services
+        boolean wasUpdated = false;
+        
+        // Check if timer-based limit is active
+        boolean timerActive = prefs.getBoolean(KEY_TIMER_ACTIVE, false);
         
         long dailyLimitMinutes = getCachedDailyLimit();
         long usedMinutes = getTodayUsageMinutes(); // Actual usage
-        long remainingMinutes = Math.max(0, dailyLimitMinutes - usedMinutes); // Only use actual usage
+        long remainingMinutes;
+        
+        if (timerActive) {
+            // Use timer-based calculation
+            remainingMinutes = getTimerRemainingMinutes();
+            Log.d(TAG, String.format("🎯 Timer-based countdown - Used: %d min, Timer remaining: %d min", 
+                    usedMinutes, remainingMinutes));
+        } else {
+            // Fallback to traditional approach
+            remainingMinutes = Math.max(0, dailyLimitMinutes - usedMinutes);
+            Log.d(TAG, String.format("📊 Traditional countdown - Used: %d min, Remaining: %d min, Limit: %d min", 
+                    usedMinutes, remainingMinutes, dailyLimitMinutes));
+        }
         
         float percentageUsed = (dailyLimitMinutes > 0) ? 
                 (usedMinutes * 100f) / dailyLimitMinutes : 0f;
-        
-        Log.d(TAG, String.format("Accurate countdown data - Used: %d min, Remaining: %d min, Limit: %d min, %.1f%%", 
-                usedMinutes, remainingMinutes, dailyLimitMinutes, percentageUsed));
         
         return new ScreenTimeCountdownData(dailyLimitMinutes, usedMinutes, remainingMinutes, 
                                           percentageUsed, wasUpdated);

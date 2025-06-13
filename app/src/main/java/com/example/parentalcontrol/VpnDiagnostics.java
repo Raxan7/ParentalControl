@@ -5,6 +5,7 @@ import android.util.Log;
 import java.net.*;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -237,13 +238,13 @@ public class VpnDiagnostics {
             Log.i(TAG, "  Checking network interfaces...");
             
             // Log network configuration that we can access
-            NetworkInterface.getNetworkInterfaces().asIterator().forEachRemaining(networkInterface -> {
+            Collections.list(NetworkInterface.getNetworkInterfaces()).forEach(networkInterface -> {
                 try {
                     if (networkInterface.isUp() && !networkInterface.isLoopback()) {
                         Log.i(TAG, "    Interface: " + networkInterface.getName() + 
                               " (" + networkInterface.getDisplayName() + ")");
                         
-                        networkInterface.getInetAddresses().asIterator().forEachRemaining(inetAddress -> {
+                        Collections.list(networkInterface.getInetAddresses()).forEach(inetAddress -> {
                             Log.i(TAG, "      Address: " + inetAddress.getHostAddress());
                         });
                     }

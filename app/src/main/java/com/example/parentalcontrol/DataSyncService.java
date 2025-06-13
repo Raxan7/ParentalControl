@@ -110,9 +110,7 @@ public class DataSyncService extends Service {
                 });
             }
         }
-    }
-
-    private void syncScreenTimeRules(String authToken, DataSync.SyncCallback callback) {
+    }    private void syncScreenTimeRules(String authToken, DataSync.SyncCallback callback) {
         new Thread(() -> {
             try {
                 OkHttpClient client = new OkHttpClient.Builder()
@@ -135,15 +133,49 @@ public class DataSyncService extends Service {
                     String responseBody = response.body().string();
                     JSONObject json = new JSONObject(responseBody);
 
-                    long dailyLimit = json.getLong("daily_limit_minutes");
+                    // Check if there are changes to sync using server-side sync flag
+                    boolean hasChanges = json.optBoolean("has_changes", false);
+                    
+                    Log.d("DataSyncService", String.format("Server sync flag response - has_changes: %s", hasChanges));
 
-                    // Save to shared preferences
-                    SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
-                    prefs.edit().putLong("daily_limit_minutes", dailyLimit).apply();
+                    if (hasChanges) {
+                        long dailyLimit = json.getLong("daily_limit_minutes");
+                        
+                        Log.d("DataSyncService", "🔄 Server has unsynced screen time changes - applying new rules");
+                        Log.d("DataSyncService", String.format("   New daily limit: %d minutes", dailyLimit));
 
-                    // Update the screen time manager
-                    ScreenTimeManager screenTimeManager = new ScreenTimeManager(this);
-                    screenTimeManager.setDailyLimit(dailyLimit);
+                        // Save new values to shared preferences
+                        SharedPreferences prefs = getSharedPreferences("ParentalControlPrefs", MODE_PRIVATE);
+                        prefs.edit()
+                            .putLong("daily_limit_minutes", dailyLimit)
+                            .apply();
+
+                        // Update the database with new rules
+                        AppUsageDatabaseHelper dbHelper = ServiceLocator.getInstance(this).getDatabaseHelper();
+                        android.database.sqlite.SQLiteDatabase db = dbHelper.getWritableDatabase();
+                        
+                        android.content.ContentValues values = new android.content.ContentValues();
+                        values.put("daily_limit_minutes", dailyLimit);
+                        values.put("last_updated", System.currentTimeMillis()); // Mark as updated locally
+                        
+                        int rowsUpdated = db.update("screen_time_rules", values, "id = ?", new String[]{"1"});
+                        if (rowsUpdated == 0) {
+                            // Insert if no rows exist
+                            values.put("id", 1);
+                            db.insert("screen_time_rules", null, values);
+                            Log.d("DataSyncService", "📝 Inserted new screen time rule");
+                        } else {
+                            Log.d("DataSyncService", "📝 Updated screen time rule");
+                        }
+                        db.close();
+
+                        // Update the screen time manager with new timer-based limit
+                        // (Server already marked as synced when we made the request)
+                        ScreenTimeManager screenTimeManager = new ScreenTimeManager(this);
+                        screenTimeManager.setTimerBasedLimit(dailyLimit);
+                    } else {
+                        Log.d("DataSyncService", "✅ No unsynced screen time changes from server");
+                    }
 
                     new Handler(Looper.getMainLooper()).post(callback::onSuccess);
                 } else {
