@@ -16,6 +16,15 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import android.view.WindowManager;
+import android.graphics.PixelFormat;
+import android.view.Gravity;
+import android.widget.RelativeLayout;
+import android.graphics.Color;
+import android.view.View;
+import android.widget.TextView;
+import android.view.MotionEvent;
+import android.widget.Toast;
 
 import androidx.core.app.NotificationCompat;
 
@@ -27,6 +36,14 @@ public class ScreenTimeCountdownService extends Service {
     private static final int NOTIFICATION_ID = 1001;
     private static final int UPDATE_INTERVAL = 1000; // Update every 1 second for smooth countdown
     private static final int RULE_CHECK_INTERVAL = 30000; // Check for rule changes every 30 seconds
+    
+    // ENHANCED LOCKDOWN: Time before making device totally unusable after limit reached
+    private static final int COMPLETE_LOCKDOWN_DELAY_MS = 30000; // 30 seconds
+    private boolean isLimitReachedTimerActive = false;
+    private long limitReachedTime = 0;
+    private boolean isCompletelyLocked = false;
+    private View overlayView = null;
+    private WindowManager windowManager = null;
 
     private Handler handler;
     private Runnable countdownRunnable;
@@ -74,6 +91,17 @@ public class ScreenTimeCountdownService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "ScreenTimeCountdownService started");
+        
+        // Check if this service was started with the enforce_complete_lockdown flag
+        if (intent != null && intent.getBooleanExtra("enforce_complete_lockdown", false)) {
+            Log.d(TAG, "Service started with enforce_complete_lockdown flag - activating lockdown immediately");
+            
+            // Create fullscreen blocking overlay immediately
+            if (!isCompletelyLocked) {
+                createFullscreenBlockingOverlay();
+            }
+        }
+        
         return START_STICKY; // Restart service if killed
     }
 
@@ -181,11 +209,29 @@ public class ScreenTimeCountdownService extends Service {
                 EnhancedAlertNotifier.showScreenTimeNotification(
                     this,
                     "🚨 SCREEN TIME LIMIT REACHED",
-                    "Your " + data.dailyLimitMinutes + " minute daily limit has been reached. Device locking NOW.",
+                    "Your " + data.dailyLimitMinutes + " minute daily limit has been reached. Device will be completely locked in 30 seconds!",
                     ScreenTimeCheckReceiver.NotificationPriority.CRITICAL
                 );
                 
-                // Send immediate broadcast to trigger lock
+                // Start the 30-second timer for complete lockdown if not already running
+                if (!isLimitReachedTimerActive) {
+                    isLimitReachedTimerActive = true;
+                    limitReachedTime = System.currentTimeMillis();
+                    
+                    // Schedule the complete lockdown
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            // Make device completely unusable after 30 seconds
+                            Log.d(TAG, "⚠️ 30 SECONDS ELAPSED - MAKING DEVICE COMPLETELY UNUSABLE");
+                            createFullscreenBlockingOverlay();
+                        }
+                    }, COMPLETE_LOCKDOWN_DELAY_MS);
+                    
+                    Log.d(TAG, "⏲️ Started 30-second timer before complete device lockdown");
+                }
+                
+                // First initiate normal device lock
                 Intent lockBroadcast = new Intent();
                 lockBroadcast.setAction("com.example.parentalcontrol.IMMEDIATE_SCREEN_TIME_LIMIT");
                 lockBroadcast.putExtra("used_minutes", (int) data.usedMinutes);
@@ -197,6 +243,15 @@ public class ScreenTimeCountdownService extends Service {
                 screenTimeManager.checkScreenTime(this);
                 
                 Log.d(TAG, "🔒 LOCKDOWN INITIATED - Used: " + data.usedMinutes + "/" + data.dailyLimitMinutes + " minutes");
+            } else {
+                // If the limit is no longer exceeded, reset the timer and remove overlay if exists
+                if (isLimitReachedTimerActive) {
+                    isLimitReachedTimerActive = false;
+                    
+                    if (isCompletelyLocked) {
+                        removeFullscreenBlockingOverlay();
+                    }
+                }
             }
             
             // Update notification with current status
@@ -414,6 +469,142 @@ public class ScreenTimeCountdownService extends Service {
                 handler.removeCallbacks(ruleCheckRunnable);
             }
         }
+        
+        // Make sure to remove the overlay if the service is stopped
+        if (isCompletelyLocked) {
+            removeFullscreenBlockingOverlay();
+        }
+        
         Log.d(TAG, "ScreenTimeCountdownService destroyed");
+    }
+    
+    /**
+     * Create a fullscreen blocking overlay that makes the device completely unusable
+     * This creates a system alert window that blocks all interactions with the device
+     */
+    private void createFullscreenBlockingOverlay() {
+        if (isCompletelyLocked) {
+            return; // Prevent multiple overlays
+        }
+        
+        Log.d(TAG, "Creating fullscreen blocking overlay to make device completely unusable");
+        
+        try {
+            // Get window manager
+            windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+            
+            // Create layout parameters for fullscreen overlay - ENHANCED TO BLOCK ALL INPUT
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    // Remove FLAG_NOT_FOCUSABLE and FLAG_NOT_TOUCHABLE to intercept all touches
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN |
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS |
+                    WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM |  // Block keyboard
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |   // Capture all touches
+                    // Add flags to show overlay on top of everything including system dialogs
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |    // Keep screen on
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,   // Show above lock screen
+                    PixelFormat.OPAQUE                                 // Completely opaque
+            );
+            
+            params.gravity = Gravity.CENTER;
+            
+            // Create the layout that will block everything
+            RelativeLayout layout = new RelativeLayout(this);
+            layout.setBackgroundColor(Color.BLACK); // Completely opaque black
+            
+            // Add warning text
+            TextView textView = new TextView(this);
+            textView.setText("SCREEN TIME LIMIT EXCEEDED\n\nDevice is locked\n\nPlease contact your parent");
+            textView.setTextColor(Color.RED);
+            textView.setTextSize(24);
+            textView.setGravity(Gravity.CENTER);
+            
+            RelativeLayout.LayoutParams textParams = new RelativeLayout.LayoutParams(
+                    RelativeLayout.LayoutParams.WRAP_CONTENT,
+                    RelativeLayout.LayoutParams.WRAP_CONTENT
+            );
+            textParams.addRule(RelativeLayout.CENTER_IN_PARENT);
+            layout.addView(textView, textParams);
+            
+            // Add a click listener to the layout to consume all touch events
+            layout.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    // Do nothing, just consume the click
+                    Log.d(TAG, "Blocked touch attempt on locked device");
+                    
+                    // Show toast to inform user device is locked
+                    Toast.makeText(getApplicationContext(), 
+                        "Device is locked. Screen time limit exceeded.", 
+                        Toast.LENGTH_SHORT).show();
+                }
+            });
+            
+            // Also consume all touch events to prevent any interaction
+            layout.setOnTouchListener(new View.OnTouchListener() {
+                @Override
+                public boolean onTouch(View v, MotionEvent event) {
+                    // Consume all touch events
+                    return true;
+                }
+            });
+            
+            // Add the view to the window
+            windowManager.addView(layout, params);
+            overlayView = layout;
+            isCompletelyLocked = true;
+            
+            Log.d(TAG, "🔒 DEVICE COMPLETELY LOCKED - Fullscreen blocking overlay active");
+            
+            // Show notification about complete lockdown
+            EnhancedAlertNotifier.showScreenTimeNotification(
+                this,
+                "🔒 DEVICE COMPLETELY LOCKED",
+                "Screen time limit exceeded. Device is now locked completely.",
+                ScreenTimeCheckReceiver.NotificationPriority.CRITICAL
+            );
+            
+            // Make sure the device also locks (screen off)
+            Intent lockIntent = new Intent(this, LockDeviceReceiver.class);
+            lockIntent.putExtra("lock_reason", "screen_time_complete");
+            sendBroadcast(lockIntent);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error creating blocking overlay", e);
+        }
+    }
+    
+    /**
+     * Remove the fullscreen blocking overlay
+     */
+    private void removeFullscreenBlockingOverlay() {
+        if (!isCompletelyLocked || overlayView == null || windowManager == null) {
+            return;
+        }
+        
+        try {
+            // Check if the view is still attached before removing
+            if (overlayView.getParent() != null) {
+                windowManager.removeView(overlayView);
+            }
+            
+            overlayView = null;
+            isCompletelyLocked = false;
+            Log.d(TAG, "🔓 Removed fullscreen blocking overlay - device now usable");
+            
+            // Show a notification that device is now usable
+            EnhancedAlertNotifier.showScreenTimeNotification(
+                this,
+                "Device Unlocked",
+                "Your device is now unlocked. Screen time limit has been updated.",
+                ScreenTimeCheckReceiver.NotificationPriority.HIGH
+            );
+        } catch (Exception e) {
+            Log.e(TAG, "Error removing blocking overlay", e);
+        }
     }
 }

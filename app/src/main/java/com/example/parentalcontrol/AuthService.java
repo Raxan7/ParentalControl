@@ -13,7 +13,7 @@ import okhttp3.*;
 public class AuthService {
     public static final String BASE_URL = "http://192.168.1.147:8080/";
     // public static final String BASE_URL = "http://192.168.1.154:8080/";
-    // public static final String BASE_URL = "https://parental-control-web.onrender.com/";
+    // public static final String BASE_URL = "https://parental.chuosmart.5com/";
     public static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     public interface AuthCallback {

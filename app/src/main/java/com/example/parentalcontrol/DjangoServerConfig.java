@@ -18,7 +18,7 @@ public class DjangoServerConfig {
      * - "192.168.1.188" for network access
      * - "10.0.2.2" for Android emulator to host machine
      */
-    public static final String DJANGO_DOMAIN = "192.168.1.123"; // Update to your Django server IP or domain
+    public static final String DJANGO_DOMAIN = "192.168.1.147"; // Update to your Django server IP or domain
     // Note: If using a domain name, ensure it resolves to the correct IP
     // Example: public static final String DJANGO_DOMAIN = "my-django-server.com";
     

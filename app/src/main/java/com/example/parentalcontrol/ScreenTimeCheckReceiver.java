@@ -22,6 +22,23 @@ public class ScreenTimeCheckReceiver extends BroadcastReceiver {
         Log.d("ScreenTimeCheckReceiver", "Performing periodic screen time and bedtime checks");
         
         try {
+            // Check if this is a complete lockdown check
+            if (intent != null && intent.getBooleanExtra("check_complete_lockdown", false)) {
+                Log.d("ScreenTimeCheckReceiver", "Received check_complete_lockdown intent - enforcing complete lockdown");
+                
+                // Start the screen time service with enforce_complete_lockdown flag
+                Intent serviceIntent = new Intent(context, ScreenTimeCountdownService.class);
+                serviceIntent.putExtra("enforce_complete_lockdown", true);
+                context.startService(serviceIntent);
+                
+                // Also trigger device lock again just to be safe
+                Intent lockIntent = new Intent(context, LockDeviceReceiver.class);
+                lockIntent.putExtra("lock_reason", "screen_time_complete");
+                context.sendBroadcast(lockIntent);
+                
+                return; // Skip regular checks since we're enforcing complete lockdown
+            }
+            
             // Create screen time manager to perform the check
             ScreenTimeManager screenTimeManager = new ScreenTimeManager(context);
             

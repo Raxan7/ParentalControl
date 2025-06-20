@@ -1,6 +1,8 @@
 // LockDeviceReceiver.java
 package com.example.parentalcontrol;
 
+import android.app.AlarmManager;
+import android.app.PendingIntent;
 import android.app.admin.DevicePolicyManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
@@ -25,10 +27,51 @@ public class LockDeviceReceiver extends BroadcastReceiver {
                     "Bedtime Enforced",
                     "Device locked due to bedtime restrictions"
             );
+        } else if ("screen_time_complete".equals(lockReason)) {
+            Log.d("LockDeviceReceiver", "COMPLETE LOCKDOWN - screen time limit exceeded by more than 30 seconds");
+            
+            // Show more severe screen time notification with higher priority
+            AlertNotifier.showNotification(
+                    context,
+                    "⛔ DEVICE COMPLETELY LOCKED",
+                    "Your screen time limit was exceeded. Device is now completely locked. Contact parent to unlock."
+            );
+            
+            // Make sure screen is off
+            DevicePolicyManager devicePolicyManager = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName adminComponentName = new ComponentName(context, DeviceAdminReceiverCustom.class);
+            if (devicePolicyManager.isAdminActive(adminComponentName)) {
+                devicePolicyManager.lockNow();
+            }
+            
+            // Start the screen time service if not already running to ensure overlay remains
+            Intent serviceIntent = new Intent(context, ScreenTimeCountdownService.class);
+            serviceIntent.putExtra("enforce_complete_lockdown", true);  // Add flag to enforce complete lockdown
+            context.startService(serviceIntent);
+            
+            // Set up a repeating alarm to ensure the overlay stays active even if removed
+            AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+            Intent alarmIntent = new Intent(context, ScreenTimeCheckReceiver.class);
+            alarmIntent.putExtra("check_complete_lockdown", true);
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    1001,
+                    alarmIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            );
+            
+            // Check every minute to ensure lockdown remains active
+            alarmManager.setRepeating(
+                    AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis(),
+                    60 * 1000, // 1 minute interval
+                    pendingIntent
+            );
+            
         } else {
             Log.d("LockDeviceReceiver", "Screen time limit exceeded - executing device lock");
             
-            // Show screen time notification
+            // Show standard screen time notification
             AlertNotifier.showNotification(
                     context,
                     "Screen Time Limit Reached",
